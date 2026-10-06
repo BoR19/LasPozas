@@ -50,8 +50,21 @@ export const syncService = {
     collections.forEach(colName => {
       onSnapshot(collection(firestoreDb, colName), (snapshot) => {
         snapshot.docChanges().forEach(async (change) => {
-          if (change.type === 'added' || change.type === 'modified') {
+          if (change.type === 'removed') {
+            const existing = await (localDb as any)[colName].where('uuid').equals(change.doc.data().uuid).first();
+            if (existing) {
+              await (localDb as any)[colName].delete(existing.id);
+            }
+          } else if (change.type === 'added' || change.type === 'modified') {
             const data = change.doc.data();
+            
+            // Si el registro está marcado como borrado, eliminar localmente
+            if (data.deleted) {
+               const existing = await (localDb as any)[colName].where('uuid').equals(data.uuid).first();
+               if (existing) await (localDb as any)[colName].delete(existing.id);
+               return;
+            }
+            
             const existing = await (localDb as any)[colName].where('uuid').equals(data.uuid).first();
             
             if (!existing || (data.updated_at > existing.updated_at)) {

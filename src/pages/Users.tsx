@@ -24,8 +24,17 @@ export default function UsersPage() {
     if (!deleteTarget) return;
 
     try {
-      await db.users.delete(deleteTarget);
-      // UI refresh is handled by useLiveQuery
+      const userToDelete = await db.users.get(deleteTarget);
+      if (userToDelete) {
+        await db.users.delete(deleteTarget);
+        
+        // Registrar eliminación para sincronizar
+        await syncService.addToQueue('user', {
+          ...userToDelete,
+          deleted: true, // Marcador para sincronizar la eliminación
+          updated_at: Date.now()
+        });
+      }
     } catch (err) {
       console.error('Error al eliminar:', err);
       alert('No se pudo eliminar');
