@@ -7,6 +7,7 @@ import ReceiptPage from './pages/ReceiptPage';
 import AdminPage from './pages/Admin';
 import LoginPage from './pages/Login';
 import { seedDatabase } from './database/db';
+import { syncService } from './services/syncService';
 
 import { LogIn } from 'lucide-react';
 import ConsultationPage from './pages/Consultation';
@@ -22,6 +23,7 @@ function AppContent() {
 
   useEffect(() => {
     seedDatabase();
+    syncService.initRealtimeSync();
   }, []);
 
   if (loading) return null;

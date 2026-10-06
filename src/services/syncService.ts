@@ -1,6 +1,6 @@
 import { db as localDb } from '../database/db';
 import { db as firestoreDb } from '../lib/firebase';
-import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, onSnapshot, query, where, Timestamp } from 'firebase/firestore';
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -39,47 +39,31 @@ export const syncService = {
         await localDb.pending_sync.update(item.id!, { status: 'synced' });
       } catch (error) {
         console.error(`Error syncing ${item.type}:`, error);
-        if (error instanceof Error) {
-            console.error(`Detalles del error: ${error.message}`);
-        }
       }
     }
-
-    // Pull remote changes
-    await this.pullSync();
   },
 
-  async pullSync() {
+  // Nueva función para iniciar listeners en tiempo real
+  initRealtimeSync() {
     const collections = ['users', 'readings', 'tarifas'];
-    for (const colName of collections) {
-      try {
-        const querySnapshot = await getDocs(collection(firestoreDb, colName));
-        for (const doc of querySnapshot.docs) {
-          const data = doc.data();
-          // Update local DB if not exists or if remote version is newer
-          const existing = await (localDb as any)[colName].where('uuid').equals(data.uuid).first();
-          
-          const objToPut = { ...data };
-          if (existing) {
-            objToPut.id = existing.id;
-          } else if (!objToPut.id) {
-            // Si es 'users' y falta 'id', intentamos usar 'uuid' o generar uno nuevo si fuera necesario.
-            // Para otras tablas con '++id', Dexie maneja la autoincrementación si 'id' es undefined.
-            if (colName === 'users') {
-                objToPut.id = data.id || data.uuid;
+    
+    collections.forEach(colName => {
+      onSnapshot(collection(firestoreDb, colName), (snapshot) => {
+        snapshot.docChanges().forEach(async (change) => {
+          if (change.type === 'added' || change.type === 'modified') {
+            const data = change.doc.data();
+            const existing = await (localDb as any)[colName].where('uuid').equals(data.uuid).first();
+            
+            if (!existing || (data.updated_at > existing.updated_at)) {
+              const objToPut = { ...data };
+              if (existing) objToPut.id = existing.id;
+              else if (colName === 'users') objToPut.id = data.id || data.uuid;
+              
+              await (localDb as any)[colName].put(objToPut);
             }
           }
-
-          if (!existing || (data.updated_at > existing.updated_at)) {
-            await (localDb as any)[colName].put(objToPut);
-          }
-        }
-      } catch (error) {
-        console.error(`Error pulling ${colName}:`, error);
-        if (error instanceof Error) {
-            console.error(`Detalles del error: ${error.message}`);
-        }
-      }
-    }
+        });
+      });
+    });
   }
 };
