@@ -1,10 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../hooks/useAuth';
-import { db, type User, type Reading } from '../database/db';
-import { formatCurrency, formatDate } from '../lib/utils';
-import { Search, Droplets, LogIn, User as UserIcon, Lock, AlertCircle, CheckCircle2, Clock, Receipt } from 'lucide-react';
-import { cn } from '../lib/utils';
+import { Droplets, LogIn, Search, User as UserIcon, Lock } from 'lucide-react';
 
 export default function LoginPage() {
   const { login } = useAuth();

@@ -39,6 +39,9 @@ export const syncService = {
         await localDb.pending_sync.update(item.id!, { status: 'synced' });
       } catch (error) {
         console.error(`Error syncing ${item.type}:`, error);
+        if (error instanceof Error) {
+            console.error(`Detalles del error: ${error.message}`);
+        }
       }
     }
 
@@ -73,6 +76,9 @@ export const syncService = {
         }
       } catch (error) {
         console.error(`Error pulling ${colName}:`, error);
+        if (error instanceof Error) {
+            console.error(`Detalles del error: ${error.message}`);
+        }
       }
     }
   }
