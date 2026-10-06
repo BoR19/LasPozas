@@ -15,8 +15,10 @@ import {
   LayoutDashboard,
   History,
   ChevronRight,
-  Activity
+  Activity,
+  RefreshCw
 } from 'lucide-react';
+import { syncService } from '../services/syncService';
 import { formatCurrency, formatDate } from '../lib/utils';
 import { useAuth } from '../hooks/useAuth';
 import { cn } from '../lib/utils';
@@ -95,6 +97,13 @@ export default function ReadingPage() {
               >
                 <History className="w-5 h-5" />
                 Historial
+              </button>
+              <button 
+                onClick={() => syncService.triggerSync()}
+                className="col-span-2 flex items-center justify-center gap-2 p-4 bg-white/20 text-white rounded-2xl font-black hover:bg-white/30 transition-all active:scale-95 backdrop-blur-sm"
+              >
+                <RefreshCw className="w-5 h-5" />
+                Sincronizar ahora
               </button>
             </div>
           </div>
