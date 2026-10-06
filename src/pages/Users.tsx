@@ -108,7 +108,15 @@ export default function UsersPage() {
       name: editingUser.name,
       address: editingUser.address,
       category: editingUser.category,
-      meter_id: editingUser.meter_id
+      meter_id: editingUser.meter_id,
+      updated_at: Date.now(),
+      version: editingUser.version + 1
+    });
+
+    await syncService.addToQueue('user', {
+      ...editingUser,
+      updated_at: Date.now(),
+      version: editingUser.version + 1
     });
 
     setIsEditing(false);
