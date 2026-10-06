@@ -1,4 +1,6 @@
-import { db } from '../database/db';
+import { db as localDb } from '../database/db';
+import { db as firestoreDb } from '../lib/firebase';
+import { collection, addDoc } from 'firebase/firestore';
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -17,7 +19,7 @@ export const syncService = {
       processedData.imagen = await blobToBase64(processedData.imagen);
     }
 
-    await db.pending_sync.add({
+    await localDb.pending_sync.add({
       type,
       data: JSON.stringify(processedData),
       status: 'pending',
@@ -29,29 +31,18 @@ export const syncService = {
   async triggerSync() {
     if (!navigator.onLine) return;
     
-    const pending = await db.pending_sync.where('status').equals('pending').toArray();
+    const pending = await localDb.pending_sync.where('status').equals('pending').toArray();
     if (pending.length === 0) return;
 
-    // Batch sync
-    const grouped = pending.reduce((acc, item) => {
-      if (!acc[item.type]) acc[item.type] = [];
-      acc[item.type].push(item);
-      return acc;
-    }, {} as Record<string, any[]>);
-
-    for (const [type, items] of Object.entries(grouped)) {
+    for (const item of pending) {
       try {
-        const response = await fetch(`/api/sync/${type}s`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(items.map(i => JSON.parse(i.data)))
-        });
+        const data = JSON.parse(item.data);
+        // Sync to Firestore
+        await addDoc(collection(firestoreDb, `${item.type}s`), data);
         
-        if (response.ok) {
-          await db.pending_sync.bulkUpdate(items.map(i => ({ key: i.id!, changes: { status: 'synced' } })));
-        }
+        await localDb.pending_sync.update(item.id!, { status: 'synced' });
       } catch (error) {
-        console.error(`Error syncing ${type}:`, error);
+        console.error(`Error syncing ${item.type}:`, error);
       }
     }
   }
