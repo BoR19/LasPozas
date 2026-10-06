@@ -1,6 +1,6 @@
 import { db as localDb } from '../database/db';
 import { db as firestoreDb } from '../lib/firebase';
-import { collection, addDoc } from 'firebase/firestore';
+import { collection, addDoc, getDocs, query, where } from 'firebase/firestore';
 
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
@@ -13,7 +13,6 @@ const blobToBase64 = (blob: Blob): Promise<string> => {
 
 export const syncService = {
   async addToQueue(type: 'reading' | 'user' | 'tarifa', data: any) {
-    // Process data to convert Blobs to Base64
     const processedData = { ...data };
     if (processedData.imagen instanceof Blob) {
       processedData.imagen = await blobToBase64(processedData.imagen);
@@ -31,18 +30,37 @@ export const syncService = {
   async triggerSync() {
     if (!navigator.onLine) return;
     
+    // Push local changes
     const pending = await localDb.pending_sync.where('status').equals('pending').toArray();
-    if (pending.length === 0) return;
-
     for (const item of pending) {
       try {
         const data = JSON.parse(item.data);
-        // Sync to Firestore
         await addDoc(collection(firestoreDb, `${item.type}s`), data);
-        
         await localDb.pending_sync.update(item.id!, { status: 'synced' });
       } catch (error) {
         console.error(`Error syncing ${item.type}:`, error);
+      }
+    }
+
+    // Pull remote changes
+    await this.pullSync();
+  },
+
+  async pullSync() {
+    const collections = ['users', 'readings', 'tarifas'];
+    for (const colName of collections) {
+      try {
+        const querySnapshot = await getDocs(collection(firestoreDb, colName));
+        for (const doc of querySnapshot.docs) {
+          const data = doc.data();
+          // Update local DB if not exists or if remote version is newer
+          const existing = await (localDb as any)[colName].where('uuid').equals(data.uuid).first();
+          if (!existing || (data.updated_at > existing.updated_at)) {
+            await (localDb as any)[colName].put({ ...data, id: existing?.id || undefined });
+          }
+        }
+      } catch (error) {
+        console.error(`Error pulling ${colName}:`, error);
       }
     }
   }
