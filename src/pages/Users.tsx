@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type UserCategory } from '../database/db';
+import { syncService } from '../services/syncService';
 import { generateId } from '../lib/utils';
 import ConfirmModal from '../components/ConfirmModal';
 import { v4 as uuidv4 } from 'uuid';
@@ -78,6 +79,18 @@ export default function UsersPage() {
       consumption: 0,
       date: Date.now(),
       status: 'paid',
+      uuid: uuidv4(),
+      updated_at: Date.now(),
+      version: 1
+    });
+
+    await syncService.addToQueue('user', {
+      id: userId,
+      name: newUser.name,
+      address: newUser.address,
+      meter_id: meterId,
+      category: newUser.category,
+      createdAt: Date.now(),
       uuid: uuidv4(),
       updated_at: Date.now(),
       version: 1
