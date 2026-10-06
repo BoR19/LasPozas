@@ -1,0 +1,5 @@
+{
+  "name": "Tolomosita Oeste AquaLectura",
+  "description": "Offline-first water meter reading and billing system for community management.",
+  "requestFramePermissions": ["camera"]
+}
