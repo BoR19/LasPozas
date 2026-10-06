@@ -55,8 +55,20 @@ export const syncService = {
           const data = doc.data();
           // Update local DB if not exists or if remote version is newer
           const existing = await (localDb as any)[colName].where('uuid').equals(data.uuid).first();
+          
+          const objToPut = { ...data };
+          if (existing) {
+            objToPut.id = existing.id;
+          } else if (!objToPut.id) {
+            // Si es 'users' y falta 'id', intentamos usar 'uuid' o generar uno nuevo si fuera necesario.
+            // Para otras tablas con '++id', Dexie maneja la autoincrementación si 'id' es undefined.
+            if (colName === 'users') {
+                objToPut.id = data.id || data.uuid;
+            }
+          }
+
           if (!existing || (data.updated_at > existing.updated_at)) {
-            await (localDb as any)[colName].put({ ...data, id: existing?.id || undefined });
+            await (localDb as any)[colName].put(objToPut);
           }
         }
       } catch (error) {
