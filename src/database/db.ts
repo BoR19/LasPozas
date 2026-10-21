@@ -28,6 +28,14 @@ export interface Meter {
   version: number;
 }
 
+export interface InvoiceDetalle {
+  cargo_fijo: number;
+  conexion: number;
+  consumo_m3: number;
+  costo_consumo: number;
+  total: number;
+}
+
 export interface Reading {
   id?: number;
   user_id: string;
@@ -38,12 +46,15 @@ export interface Reading {
   consumption: number;
   date: number;
   status: 'paid' | 'pending' | 'overdue';
+  detalle?: InvoiceDetalle;
   bill_details?: {
     water_cost: number;
     fixed_charge: number;
     sewer_cost: number;
+    conexion?: number;
     total: number;
     tariff_id?: number;
+    detalle?: InvoiceDetalle;
   };
   imagen?: Blob;
   uuid: string;
@@ -63,12 +74,15 @@ export interface Invoice {
   lectura_id: number | string;
   fecha: number;
   date: number;
+  detalle?: InvoiceDetalle;
   bill_details?: {
     water_cost: number;
     fixed_charge: number;
     sewer_cost: number;
+    conexion?: number;
     total: number;
     tariff_id?: number;
+    detalle?: InvoiceDetalle;
   };
   uuid: string;
   updated_at: number;
@@ -211,8 +225,8 @@ export async function seedDatabase() {
       costo_m3_exceso: 0.80,
       tarifa_conexion: 50,
       porcentaje_alcantarillado: 20,
-      fecha_inicio: new Date('2024-01-01').getTime(),
-      fecha_fin: new Date('2030-12-31').getTime()
+      fecha_inicio: new Date('2023-12-31').getTime(),
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
     },
     {
       categoria: 'Residencial',
@@ -221,8 +235,8 @@ export async function seedDatabase() {
       costo_m3_exceso: 1.80,
       tarifa_conexion: 100,
       porcentaje_alcantarillado: 20,
-      fecha_inicio: new Date('2024-01-01').getTime(),
-      fecha_fin: new Date('2030-12-31').getTime()
+      fecha_inicio: new Date('2023-12-31').getTime(),
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
     },
     {
       categoria: 'Comercial',
@@ -231,8 +245,8 @@ export async function seedDatabase() {
       costo_m3_exceso: 3.50,
       tarifa_conexion: 200,
       porcentaje_alcantarillado: 20,
-      fecha_inicio: new Date('2024-01-01').getTime(),
-      fecha_fin: new Date('2030-12-31').getTime()
+      fecha_inicio: new Date('2023-12-31').getTime(),
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
     },
     {
       categoria: 'Industrial',
@@ -241,8 +255,8 @@ export async function seedDatabase() {
       costo_m3_exceso: 6.00,
       tarifa_conexion: 500,
       porcentaje_alcantarillado: 20,
-      fecha_inicio: new Date('2024-01-01').getTime(),
-      fecha_fin: new Date('2030-12-31').getTime()
+      fecha_inicio: new Date('2023-12-31').getTime(),
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
     }
   ];
 
@@ -258,6 +272,17 @@ export async function seedDatabase() {
         uuid: uuidv4(),
         updated_at: Date.now(),
         version: 1
+      });
+    } else {
+      // Sincronizar tarifas vigentes
+      await db.tariffs.update(existing.id!, {
+        cargo_fijo_mensual: tariff.cargo_fijo_mensual,
+        tarifa_conexion: tariff.tarifa_conexion,
+        costo_m3_base: tariff.costo_m3_base,
+        costo_m3_exceso: tariff.costo_m3_exceso,
+        fecha_inicio: tariff.fecha_inicio,
+        fecha_fin: tariff.fecha_fin,
+        updated_at: Date.now()
       });
     }
   }

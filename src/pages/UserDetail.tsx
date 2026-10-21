@@ -115,15 +115,20 @@ export default function UserDetailPage() {
       const consumption = current - (latestReading?.current_reading || 0);
       const tariff = await getActiveTariff(user.category);
       
-      const esPrimeraLectura = !latestReading || latestReading.current_reading === 0;
-      const bill = calculateBill(consumption, tariff, esPrimeraLectura);
+      // La conexión SOLO se cobra en la primera factura (al registrar usuario).
+      // Para lecturas posteriores, cálculo normal:
+      // si consumo <= 20: total = cargo_fijo + (consumo * base)
+      // si consumo > 20: total = cargo_fijo + (20 * base) + ((consumo - 20) * exceso)
+      const hasPriorReadings = (readings && readings.length > 0) || (latestReading !== undefined);
+      const esPrimeraLectura = !hasPriorReadings;
+      const bill = calculateBill(consumption, tariff, esPrimeraLectura, false);
 
       const facturaId = generateId('FAC-');
       const facturaUuid = uuidv4();
       const readingUuid = uuidv4();
       const now = Date.now();
 
-      const readingData = {
+      const readingData: Reading = {
         user_id: user.id,
         medidor_id: user.meter_id,
         factura_id: facturaId,
@@ -132,6 +137,7 @@ export default function UserDetailPage() {
         consumption,
         date: now,
         status: 'pending' as const,
+        detalle: bill.detalle,
         bill_details: bill,
         imagen: capturedImage || undefined,
         uuid: readingUuid,
@@ -152,6 +158,7 @@ export default function UserDetailPage() {
         lectura_id: readingId,
         fecha: now,
         date: now,
+        detalle: bill.detalle,
         bill_details: bill,
         uuid: facturaUuid,
         updated_at: now,

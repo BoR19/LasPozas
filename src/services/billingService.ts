@@ -1,50 +1,124 @@
-import { db, type User, type Reading, type Tariff, type UserCategory, type Invoice, type Meter } from '../database/db';
+import { db, type User, type Reading, type Tariff, type UserCategory, type Invoice, type Meter, type InvoiceDetalle } from '../database/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateId } from '../lib/utils';
 import { syncService } from './syncService';
 
-// calculateBill permite total 0.00 y no lanza error si tariff es nulo o indefinido
-export function calculateBill(consumption: number, tariff?: Tariff | null, isFirstReading: boolean = false) {
-  if (isFirstReading) {
-    return {
-      water_cost: 0,
-      fixed_charge: 0,
-      sewer_cost: 0,
-      total: 0, // Permite explícitamente Bs 0,00 para la primera factura
-      tariff_id: tariff?.id || 0
-    };
-  }
+/**
+ * Estructura tarifaria vigente (31 dic 2023 al 30 dic 2030)
+ * Industrial: Cargo Fijo Bs 40, Conexión Bs 500, Base Bs 4, Exceso Bs 6
+ * Comercial: Cargo Fijo Bs 17, Conexión Bs 200, Base Bs 2.50, Exceso Bs 3.50
+ * Residencial: Cargo Fijo Bs 7, Conexión Bs 100, Base Bs 1.20, Exceso Bs 1.80
+ * Residencial Social: Cargo Fijo Bs 3, Conexión Bs 50, Base Bs 0.50, Exceso Bs 0.80
+ */
+export const DEFAULT_TARIFF_CONFIG: Record<UserCategory, { cargo_fijo: number; conexion: number; base: number; exceso: number }> = {
+  'Industrial': { cargo_fijo: 40, conexion: 500, base: 4.00, exceso: 6.00 },
+  'Comercial': { cargo_fijo: 17, conexion: 200, base: 2.50, exceso: 3.50 },
+  'Residencial': { cargo_fijo: 7, conexion: 100, base: 1.20, exceso: 1.80 },
+  'Residencial Social': { cargo_fijo: 3, conexion: 50, base: 0.50, exceso: 0.80 }
+};
 
-  const fixed_charge = tariff?.cargo_fijo_mensual ?? 0;
+/**
+ * Cálculo de facturación:
+ * 
+ * Si es esUsuarioNuevo == true o esPrimeraLectura == true:
+ *   total = tarifa.cargo_fijo + tarifa.conexion + (consumo * tarifa.base)
+ *   Como consumo es 0, sería solo cargo fijo + conexión:
+ *   - Bruno Torrejon (Comercial): 17 + 200 = 217
+ *   - Residencial: 7 + 100 = 107
+ *   - Residencial Social: 3 + 50 = 53
+ *   - Industrial: 40 + 500 = 540
+ * 
+ * Para las siguientes facturas (usuario ya existente):
+ *   si consumo <= 20: total = cargo_fijo + (consumo * base)
+ *   si consumo > 20: total = cargo_fijo + (20 * base) + ((consumo - 20) * exceso)
+ *   (La conexión SOLO se cobra en la primera factura)
+ * 
+ * Devuelve desglose: detalle: { cargo_fijo, conexion, consumo_m3, costo_consumo, total }
+ */
+export function calculateBill(
+  consumption: number,
+  tariff?: Tariff | null,
+  isFirstReading: boolean = false,
+  isNewUser: boolean = false
+) {
+  const isFirst = Boolean(isFirstReading || isNewUser);
+
+  const cargo_fijo = tariff?.cargo_fijo_mensual ?? 0;
+  const conexion = isFirst ? (tariff?.tarifa_conexion ?? 0) : 0;
   const costo_m3_base = tariff?.costo_m3_base ?? 0;
   const costo_m3_exceso = tariff?.costo_m3_exceso ?? 0;
-  const porcentaje = tariff?.porcentaje_alcantarillado ?? 20;
+  const consumo_m3 = Math.max(0, Number(consumption) || 0);
 
-  let water_cost = 0;
-  if (consumption <= 20) {
-    water_cost = consumption * costo_m3_base;
+  let costo_consumo = 0;
+  if (isFirst) {
+    costo_consumo = consumo_m3 * costo_m3_base;
   } else {
-    water_cost = (20 * costo_m3_base) + ((consumption - 20) * costo_m3_exceso);
+    if (consumo_m3 <= 20) {
+      costo_consumo = consumo_m3 * costo_m3_base;
+    } else {
+      costo_consumo = (20 * costo_m3_base) + ((consumo_m3 - 20) * costo_m3_exceso);
+    }
   }
 
-  const sewer_cost = water_cost * (porcentaje / 100);
-  const total = water_cost + fixed_charge + sewer_cost;
+  costo_consumo = Math.round(costo_consumo * 100) / 100;
+  const total = Math.round((cargo_fijo + conexion + costo_consumo) * 100) / 100;
+
+  const detalle: InvoiceDetalle = {
+    cargo_fijo,
+    conexion,
+    consumo_m3,
+    costo_consumo,
+    total
+  };
 
   return {
-    water_cost,
-    fixed_charge,
-    sewer_cost,
+    water_cost: costo_consumo,
+    fixed_charge: cargo_fijo,
+    sewer_cost: 0,
+    conexion,
     total,
-    tariff_id: tariff?.id || 0
+    tariff_id: tariff?.id || 0,
+    detalle
   };
 }
 
+/**
+ * Busca la tarifa correcta por categoria y por fecha vigente (la que esté entre 2023-2030).
+ * Si no está cargada en base de datos, usa los valores reglamentarios por defecto.
+ */
 export async function getActiveTariff(category: UserCategory, date: number = Date.now()): Promise<Tariff | undefined> {
-  return await db.tariffs
+  let tariff = await db.tariffs
     .where('categoria')
     .equals(category)
     .filter(t => t.fecha_inicio <= date && t.fecha_fin >= date)
     .first();
+
+  if (!tariff) {
+    tariff = await db.tariffs
+      .where('categoria')
+      .equals(category)
+      .first();
+  }
+
+  if (!tariff) {
+    const config = DEFAULT_TARIFF_CONFIG[category] || DEFAULT_TARIFF_CONFIG['Residencial'];
+    tariff = {
+      id: 0,
+      categoria: category,
+      cargo_fijo_mensual: config.cargo_fijo,
+      tarifa_conexion: config.conexion,
+      costo_m3_base: config.base,
+      costo_m3_exceso: config.exceso,
+      porcentaje_alcantarillado: 20,
+      fecha_inicio: new Date('2023-12-31').getTime(),
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime(),
+      uuid: `tarifa-default-${category.toLowerCase().replace(/\s+/g, '-')}`,
+      updated_at: Date.now(),
+      version: 1
+    };
+  }
+
+  return tariff;
 }
 
 export async function getLatestReading(userId: string): Promise<Reading | undefined> {
@@ -58,12 +132,66 @@ export async function getLatestReading(userId: string): Promise<Reading | undefi
 }
 
 /**
+ * Implementación de crearFacturaInicial:
+ * Busca la tarifa por categoría y fecha vigente (2023-2030)
+ * Si es esUsuarioNuevo == true o esPrimeraLectura == true:
+ * total = tarifa.cargo_fijo + tarifa.conexion + (consumo * tarifa.base)
+ * Con consumo = 0: total = cargo_fijo + conexion
+ * Guarda desglose detalle: { cargo_fijo, conexion, consumo_m3, costo_consumo, total }
+ */
+export async function crearFacturaInicial(params: {
+  userId: string;
+  meterId: string;
+  category: UserCategory;
+  initialReading?: number;
+  date?: number;
+  facturaId?: string;
+  readingId?: number;
+  esUsuarioNuevo?: boolean;
+  esPrimeraLectura?: boolean;
+}) {
+  const now = params.date || Date.now();
+  const consumption = 0;
+  const facturaId = params.facturaId || generateId('FAC-');
+
+  const tariff = await getActiveTariff(params.category, now);
+  const bill = calculateBill(consumption, tariff, true, true);
+
+  const facturaDoc: Invoice = {
+    factura_id: facturaId,
+    total: bill.total,
+    consumo: 0,
+    estado: 'pendiente',
+    usuario_id: params.userId,
+    user_id: params.userId,
+    medidor_id: params.meterId,
+    lectura_id: params.readingId || 0,
+    fecha: now,
+    date: now,
+    detalle: bill.detalle,
+    bill_details: bill,
+    uuid: uuidv4(),
+    updated_at: now,
+    version: 1
+  };
+
+  return {
+    facturaId,
+    bill,
+    facturaDoc,
+    tariff
+  };
+}
+
+/**
  * Transacción de registro de usuario:
  * Crea atómicamente 4 documentos:
  * 1. usuarios
  * 2. medidores (id autogenerado MET-XXXX)
  * 3. lecturas (lectura_anterior: 0, lectura_actual: lectura_inicial, consumo: 0)
- * 4. facturas (total: 0, consumo: 0, estado: 'pendiente', usuario_id, medidor_id, lectura_id, fecha)
+ * 4. facturas con desglose detalle: { cargo_fijo, conexion, consumo_m3, costo_consumo, total }
+ * 
+ * La primera factura incluye la CONEXIÓN (ej. Comercial: 17 + 200 = 217, Residencial: 7 + 100 = 107)
  */
 export async function registrarUsuario(data: {
   name: string;
@@ -77,8 +205,12 @@ export async function registrarUsuario(data: {
   const now = Date.now();
   const initialReading = Number(data.initialReading) || 0;
 
+  // Tarifa vigente entre 2023-2030
   const tariff = await getActiveTariff(data.category, now);
   const tariffId = tariff?.id || 0;
+
+  // Cálculo de factura inicial con cargo fijo + conexión
+  const bill = calculateBill(0, tariff, true, true);
 
   const userUuid = uuidv4();
   const meterUuid = uuidv4();
@@ -133,13 +265,8 @@ export async function registrarUsuario(data: {
       consumption: 0,
       date: now,
       status: 'pending',
-      bill_details: {
-        water_cost: 0,
-        fixed_charge: 0,
-        sewer_cost: 0,
-        total: 0, // Permite Bs 0,00
-        tariff_id: tariffId
-      },
+      detalle: bill.detalle,
+      bill_details: bill,
       uuid: readingUuid,
       updated_at: now,
       version: 1
@@ -149,7 +276,7 @@ export async function registrarUsuario(data: {
     // 4. facturas
     facturaDoc = {
       factura_id: facturaId,
-      total: 0,
+      total: bill.total,
       consumo: 0,
       estado: 'pendiente',
       usuario_id: userId,
@@ -158,13 +285,8 @@ export async function registrarUsuario(data: {
       lectura_id: createdReadingId,
       fecha: now,
       date: now,
-      bill_details: {
-        water_cost: 0,
-        fixed_charge: 0,
-        sewer_cost: 0,
-        total: 0,
-        tariff_id: tariffId
-      },
+      detalle: bill.detalle,
+      bill_details: bill,
       uuid: facturaUuid,
       updated_at: now,
       version: 1
@@ -197,7 +319,8 @@ export const guardarUsuario = registrarUsuario;
 
 /**
  * Función cargarRecibo(id) / getRecibo(id)
- * - No crashea si algún campo es null
+ * - Lee el desglose detalle: { cargo_fijo, conexion, consumo_m3, costo_consumo, total }
+ * - No crashea si algún campo es null o undefined
  * - Si la tarifa por categoría no existe, usa 0 por defecto
  * - Agrega console.log del error real
  */
@@ -262,39 +385,8 @@ export async function cargarRecibo(id: string | number): Promise<{
       }
     }
 
-    // Si tenemos factura pero no lectura en tabla readings, construir lectura segura desde la factura
-    if (!reading && factura) {
-      reading = {
-        id: typeof factura.lectura_id === 'number' ? factura.lectura_id : 1,
-        user_id: factura.usuario_id || factura.user_id,
-        medidor_id: factura.medidor_id,
-        factura_id: factura.factura_id,
-        previous_reading: 0,
-        current_reading: factura.consumo || 0,
-        consumption: factura.consumo || 0,
-        date: factura.fecha || factura.date || Date.now(),
-        status: factura.estado === 'pagado' ? 'paid' : 'pending',
-        bill_details: factura.bill_details || {
-          water_cost: 0,
-          fixed_charge: 0,
-          sewer_cost: 0,
-          total: factura.total || 0,
-          tariff_id: 0
-        },
-        uuid: factura.uuid || uuidv4(),
-        updated_at: factura.updated_at || Date.now(),
-        version: 1
-      };
-    }
-
-    if (!reading) {
-      const notFoundErr = new Error(`No se encontró el documento de factura ni lectura para ID: "${id}"`);
-      console.error('[cargarRecibo] Error real al buscar lectura:', notFoundErr);
-      throw notFoundErr;
-    }
-
     // 3. Buscar datos del usuario
-    const userId = reading.user_id || factura?.usuario_id || factura?.user_id;
+    const userId = reading?.user_id || factura?.usuario_id || factura?.user_id;
     let user: User | undefined;
     if (userId) {
       user = await db.users.get(userId);
@@ -304,12 +396,12 @@ export async function cargarRecibo(id: string | number): Promise<{
     }
 
     if (!user) {
-      console.warn(`[cargarRecibo] Usuario "${userId}" no encontrado. Usando datos seguros de respaldo.`);
+      console.warn(`[cargarRecibo] Usuario "${userId}" no encontrado. Usando datos de respaldo.`);
       user = {
         id: userId || 'USR-ACTUAL',
         name: 'Cliente Tolomosita Oeste',
         address: 'Tolomosita Oeste',
-        meter_id: reading.medidor_id || factura?.medidor_id || 'MET-S/N',
+        meter_id: reading?.medidor_id || factura?.medidor_id || 'MET-S/N',
         category: 'Residencial',
         createdAt: Date.now(),
         uuid: uuidv4(),
@@ -320,11 +412,12 @@ export async function cargarRecibo(id: string | number): Promise<{
 
     // 4. Buscar tarifa (Si no existe, usar 0 por defecto)
     let tariff: Tariff | undefined;
-    if (reading.bill_details?.tariff_id) {
-      tariff = await db.tariffs.get(reading.bill_details.tariff_id);
+    const readingTariffId = reading?.bill_details?.tariff_id || factura?.bill_details?.tariff_id;
+    if (readingTariffId) {
+      tariff = await db.tariffs.get(readingTariffId);
     }
     if (!tariff && user.category) {
-      tariff = await db.tariffs.where('categoria').equals(user.category).first();
+      tariff = await getActiveTariff(user.category, reading?.date || factura?.fecha || Date.now());
     }
 
     if (!tariff) {
@@ -337,42 +430,127 @@ export async function cargarRecibo(id: string | number): Promise<{
         costo_m3_exceso: 0,
         tarifa_conexion: 0,
         porcentaje_alcantarillado: 0,
-        fecha_inicio: 0,
-        fecha_fin: Date.now() + 315360000000,
+        fecha_inicio: new Date('2023-12-31').getTime(),
+        fecha_fin: new Date('2030-12-30T23:59:59').getTime(),
         uuid: 'tarifa-default-cero',
         updated_at: Date.now(),
         version: 1
       };
     }
 
-    // Asegurar que ningún campo sea null ni undefined
-    reading.previous_reading = reading.previous_reading ?? 0;
-    reading.current_reading = reading.current_reading ?? 0;
-    reading.consumption = reading.consumption ?? 0;
-    reading.date = reading.date ?? Date.now();
-    reading.uuid = reading.uuid || factura?.uuid || `REC-${reading.id || '001'}`;
+    // 5. Leer y normalizar desglose detalle: { cargo_fijo, conexion, consumo_m3, costo_consumo, total }
+    // Sin crashear si un campo viene en null o undefined
+    const rawDetalle = factura?.detalle || reading?.detalle || factura?.bill_details?.detalle || reading?.bill_details?.detalle;
+    
+    // Detectar si es primera factura / registro de nuevo usuario
+    const isFirstRegistration = (
+      (reading?.previous_reading === 0 && (reading?.consumption === 0 || reading?.consumption === undefined)) ||
+      (factura?.consumo === 0 && (factura?.total === 0 || factura?.total === (tariff.cargo_fijo_mensual + tariff.tarifa_conexion)))
+    );
 
-    if (!reading.bill_details) {
-      reading.bill_details = {
-        water_cost: 0,
-        fixed_charge: 0,
-        sewer_cost: 0,
-        total: factura?.total ?? 0,
-        tariff_id: tariff.id || 0
-      };
-    } else {
-      reading.bill_details.water_cost = reading.bill_details.water_cost ?? 0;
-      reading.bill_details.fixed_charge = reading.bill_details.fixed_charge ?? 0;
-      reading.bill_details.sewer_cost = reading.bill_details.sewer_cost ?? 0;
-      reading.bill_details.total = reading.bill_details.total ?? factura?.total ?? 0;
-      reading.bill_details.tariff_id = reading.bill_details.tariff_id ?? tariff.id ?? 0;
+    const cargo_fijo = rawDetalle?.cargo_fijo ?? reading?.bill_details?.fixed_charge ?? factura?.bill_details?.fixed_charge ?? tariff.cargo_fijo_mensual ?? 0;
+    
+    let conexion = rawDetalle?.conexion ?? reading?.bill_details?.conexion ?? factura?.bill_details?.conexion;
+    if (conexion === undefined || conexion === null) {
+      conexion = isFirstRegistration ? (tariff.tarifa_conexion || 0) : 0;
     }
 
-    console.log('[cargarRecibo] Datos cargados correctamente:', {
+    const consumo_m3 = rawDetalle?.consumo_m3 ?? reading?.consumption ?? factura?.consumo ?? 0;
+    const costo_consumo = rawDetalle?.costo_consumo ?? reading?.bill_details?.water_cost ?? factura?.bill_details?.water_cost ?? 0;
+    
+    let total = rawDetalle?.total ?? factura?.total ?? reading?.bill_details?.total;
+    // Si era una primera factura que quedó en 0 por el bug anterior, corregir el total con cargo fijo + conexión
+    if ((total === 0 || total === undefined || total === null) && isFirstRegistration && (tariff.cargo_fijo_mensual > 0 || tariff.tarifa_conexion > 0)) {
+      total = cargo_fijo + conexion + costo_consumo;
+      // Actualizar en base de datos local para persistir la corrección
+      if (factura?.id) {
+        await db.facturas.update(factura.id, { total, updated_at: Date.now() });
+      }
+      if (reading?.id) {
+        await db.readings.update(reading.id, { 
+          bill_details: {
+            water_cost: costo_consumo,
+            fixed_charge: cargo_fijo,
+            sewer_cost: 0,
+            conexion,
+            total,
+            tariff_id: tariff.id || 0
+          },
+          updated_at: Date.now() 
+        });
+      }
+    } else if (total === undefined || total === null) {
+      total = cargo_fijo + conexion + costo_consumo;
+    }
+
+    const safeDetalle: InvoiceDetalle = {
+      cargo_fijo: Number(cargo_fijo) || 0,
+      conexion: Number(conexion) || 0,
+      consumo_m3: Number(consumo_m3) || 0,
+      costo_consumo: Number(costo_consumo) || 0,
+      total: Number(total) || 0
+    };
+
+    // Si no tenemos lectura en la tabla readings, construirla de forma segura
+    if (!reading && factura) {
+      reading = {
+        id: typeof factura.lectura_id === 'number' ? factura.lectura_id : 1,
+        user_id: user.id,
+        medidor_id: factura.medidor_id || user.meter_id,
+        factura_id: factura.factura_id,
+        previous_reading: 0,
+        current_reading: safeDetalle.consumo_m3,
+        consumption: safeDetalle.consumo_m3,
+        date: factura.fecha || factura.date || Date.now(),
+        status: factura.estado === 'pagado' ? 'paid' : 'pending',
+        detalle: safeDetalle,
+        bill_details: {
+          water_cost: safeDetalle.costo_consumo,
+          fixed_charge: safeDetalle.cargo_fijo,
+          sewer_cost: 0,
+          conexion: safeDetalle.conexion,
+          total: safeDetalle.total,
+          tariff_id: tariff.id || 0,
+          detalle: safeDetalle
+        },
+        uuid: factura.uuid || uuidv4(),
+        updated_at: factura.updated_at || Date.now(),
+        version: 1
+      };
+    } else if (reading) {
+      reading.previous_reading = reading.previous_reading ?? 0;
+      reading.current_reading = reading.current_reading ?? 0;
+      reading.consumption = reading.consumption ?? safeDetalle.consumo_m3;
+      reading.date = reading.date ?? Date.now();
+      reading.uuid = reading.uuid || factura?.uuid || `REC-${reading.id || '001'}`;
+      reading.detalle = safeDetalle;
+      reading.bill_details = {
+        water_cost: safeDetalle.costo_consumo,
+        fixed_charge: safeDetalle.cargo_fijo,
+        sewer_cost: reading.bill_details?.sewer_cost ?? 0,
+        conexion: safeDetalle.conexion,
+        total: safeDetalle.total,
+        tariff_id: reading.bill_details?.tariff_id ?? tariff.id ?? 0,
+        detalle: safeDetalle
+      };
+    }
+
+    if (factura) {
+      factura.detalle = safeDetalle;
+      factura.total = safeDetalle.total;
+    }
+
+    if (!reading) {
+      const notFoundErr = new Error(`No se encontró el documento de factura ni lectura para ID: "${id}"`);
+      console.error('[cargarRecibo] Error real al buscar lectura:', notFoundErr);
+      throw notFoundErr;
+    }
+
+    console.log('[cargarRecibo] Recibo y desglose cargados exitosamente:', {
       readingId: reading.id,
       userId: user.id,
       facturaId: factura?.factura_id || reading.factura_id,
-      total: reading.bill_details.total
+      desglose: safeDetalle
     });
 
     return { reading, user, tariff, factura };

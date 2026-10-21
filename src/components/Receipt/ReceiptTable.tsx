@@ -20,7 +20,12 @@ export default function ReceiptTable({ reading, tariff }: ReceiptTableProps) {
     </div>
   );
 
-  const totalPagar = reading.bill_details?.total ?? 0;
+  const detalle = reading.detalle || reading.bill_details?.detalle;
+  const cargoFijo = detalle?.cargo_fijo ?? reading.bill_details?.fixed_charge ?? tariff?.cargo_fijo_mensual ?? 0;
+  const conexion = detalle?.conexion ?? reading.bill_details?.conexion ?? 0;
+  const costoConsumo = detalle?.costo_consumo ?? reading.bill_details?.water_cost ?? 0;
+  const consumoM3 = detalle?.consumo_m3 ?? reading.consumption ?? 0;
+  const totalPagar = detalle?.total ?? reading.bill_details?.total ?? (cargoFijo + conexion + costoConsumo);
 
   return (
     <div className="w-full my-8">
@@ -31,13 +36,21 @@ export default function ReceiptTable({ reading, tariff }: ReceiptTableProps) {
       </div>
       
       <div className="text-zinc-900 font-medium">
-        {(reading.previous_reading ?? 0) === 0 ? (
-          renderRow('Lectura Inicial / Conexión', '1', formatCurrency(totalPagar), totalPagar)
+        {conexion > 0 ? (
+          <>
+            {renderRow('Cargo Fijo Mensual', '1', formatCurrency(cargoFijo), cargoFijo)}
+            {renderRow('Derecho de Conexión', '1', formatCurrency(conexion), conexion)}
+            {costoConsumo > 0 && (
+              renderRow('Consumo Agua', `${consumoM3} m³`, formatCurrency(tariff?.costo_m3_base ?? 0), costoConsumo)
+            )}
+          </>
         ) : (
           <>
-            {renderRow('Cargo Fijo', '1', formatCurrency(tariff?.cargo_fijo_mensual ?? 0), reading.bill_details?.fixed_charge ?? 0)}
-            {renderRow('Consumo Agua', `${reading.consumption ?? 0} m³`, '...', reading.bill_details?.water_cost ?? 0)}
-            {renderRow(`Alcantarillado (${tariff?.porcentaje_alcantarillado ?? 20}%)`, '-', '-', reading.bill_details?.sewer_cost ?? 0)}
+            {renderRow('Cargo Fijo', '1', formatCurrency(cargoFijo), cargoFijo)}
+            {renderRow('Consumo Agua', `${consumoM3} m³`, '...', costoConsumo)}
+            {(reading.bill_details?.sewer_cost ?? 0) > 0 && (
+              renderRow(`Alcantarillado (${tariff?.porcentaje_alcantarillado ?? 20}%)`, '-', '-', reading.bill_details?.sewer_cost ?? 0)
+            )}
           </>
         )}
       </div>
