@@ -10,15 +10,44 @@
     <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <script>
-      // Gracefully prevent unhandled websocket rejection logs from dev server proxy
-      window.addEventListener('unhandledrejection', function(event) {
-        if (event.reason && (
-          event.reason.message?.includes('WebSocket') || 
-          event.reason.toString?.().includes('WebSocket')
-        )) {
-          event.preventDefault();
-        }
-      });
+      (function() {
+        // Suppress benign Vite dev server WebSocket connection errors (HMR is disabled in this environment)
+        const isWsError = function(msg) {
+          if (!msg) return false;
+          const str = typeof msg === 'string' ? msg : (msg.message || msg.stack || String(msg));
+          return str.includes('WebSocket') || str.includes('websocket') || str.includes('[vite]');
+        };
+
+        const originalError = console.error;
+        console.error = function(...args) {
+          if (args.some(arg => isWsError(arg))) {
+            return;
+          }
+          originalError.apply(console, args);
+        };
+
+        const originalWarn = console.warn;
+        console.warn = function(...args) {
+          if (args.some(arg => isWsError(arg))) {
+            return;
+          }
+          originalWarn.apply(console, args);
+        };
+
+        window.addEventListener('unhandledrejection', function(event) {
+          if (isWsError(event.reason)) {
+            event.preventDefault();
+            event.stopImmediatePropagation?.();
+          }
+        }, true);
+
+        window.addEventListener('error', function(event) {
+          if (isWsError(event.message) || isWsError(event.error)) {
+            event.preventDefault();
+            event.stopImmediatePropagation?.();
+          }
+        }, true);
+      })();
     </script>
   </head>
   <body>

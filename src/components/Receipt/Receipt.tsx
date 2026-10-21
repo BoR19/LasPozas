@@ -30,7 +30,7 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
         <p className="text-zinc-600">No se pudieron cargar los datos necesarios.</p>
         <button 
           onClick={() => navigate(-1)}
-          className="bg-zinc-900 text-white px-6 py-3 rounded-2xl font-bold hover:bg-zinc-800 transition-all"
+          className="bg-zinc-900 text-white px-6 py-3 rounded-2xl font-bold hover:bg-zinc-800 transition-all text-sm"
         >
           Volver
         </button>
@@ -53,54 +53,27 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
     version: 1
   };
 
+  const isReconexion = Boolean(
+    reading.tipo_factura === 'reconexion' ||
+    reading.detalle?.tipo_factura === 'reconexion' ||
+    reading.detalle?.es_reconexion ||
+    reading.bill_details?.es_reconexion ||
+    ((reading.detalle?.reconexion ?? 0) > 0 && !reading.detalle?.es_primera_factura)
+  );
+
+  const isPrimeraFactura = !isReconexion && (
+    reading.detalle?.es_primera_factura !== undefined
+      ? Boolean(reading.detalle.es_primera_factura)
+      : reading.bill_details?.es_primera_factura !== undefined
+      ? Boolean(reading.bill_details.es_primera_factura)
+      : Boolean(
+          ((reading.detalle?.conexion ?? 0) > 0 || (reading.detalle?.costo_conexion ?? 0) > 0) ||
+          ((reading.previous_reading ?? 0) === 0 && (reading.consumption ?? 0) === 0)
+        )
+  );
+
   const handlePrint = () => {
-    const printArea = document.getElementById('print-area');
-    if (!printArea) {
-      console.error('No se pudo encontrar el área de impresión');
-      return;
-    }
-
-    const printWindow = window.open('', '_blank', 'width=800,height=600');
-    if (!printWindow) {
-      alert('Por favor, habilita las ventanas emergentes para poder imprimir.');
-      return;
-    }
-
-    const styles = Array.from(document.styleSheets)
-      .map(sheet => {
-        try {
-          return Array.from(sheet.cssRules).map(rule => rule.cssText).join('\n');
-        } catch {
-          return '';
-        }
-      })
-      .join('\n');
-
-    printWindow.document.write(`
-      <html>
-        <head>
-          <title>Recibo - ${user.name}</title>
-          <style>
-            ${styles}
-            body { font-family: sans-serif; padding: 20px; background: white; }
-            #print-area { display: block !important; width: 100% !important; max-width: 400px !important; margin: 0 auto !important; }
-          </style>
-        </head>
-        <body>
-          <div id="print-area">
-            ${printArea.innerHTML}
-          </div>
-        </body>
-      </html>
-    `);
-    
-    printWindow.document.close();
-    
-    setTimeout(() => {
-      printWindow.focus();
-      printWindow.print();
-      printWindow.close();
-    }, 500);
+    window.print();
   };
 
   const getReceiptImage = async () => {
@@ -133,7 +106,8 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
       }
     } catch (err) {
       console.error('Error sharing receipt:', err);
-      alert('No se pudo compartir el recibo. Intente descargarlo.');
+      // Fallback a descarga directa
+      await download();
     } finally {
       setIsProcessing(null);
     }
@@ -158,34 +132,43 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
   };
 
   return (
-    <div className="relative space-y-6">
+    <div className="relative space-y-6 max-w-lg mx-auto">
+      {/* Botón flotante para cerrar / volver */}
       <button 
         onClick={() => navigate(-1)}
-        className="absolute -top-4 -right-4 z-[999] p-2 bg-zinc-900 text-white rounded-full hover:bg-zinc-700 transition-all shadow-lg active:scale-95"
+        className="absolute -top-3 -right-3 z-[999] p-2 bg-zinc-900 text-white rounded-full hover:bg-zinc-700 transition-all shadow-lg active:scale-95 print:hidden"
+        title="Cerrar recibo"
       >
         <X className="w-5 h-5" />
       </button>
 
+      {/* Tarjeta del Recibo (Área de Impresión) */}
       <div 
         ref={receiptRef}
         id="print-area"
-        className="bg-white p-8 rounded-3xl shadow-xl border border-zinc-100 max-w-md mx-auto print:shadow-none print:border-none print:p-4 print:m-0 receipt-container"
+        className="bg-white p-6 sm:p-8 rounded-3xl shadow-xl border border-zinc-100 max-w-md mx-auto print:shadow-none print:border-none print:p-0 print:m-0 print:max-w-full receipt-container"
       >
         <ReceiptHeader reading={reading} user={user} />
         <ReceiptInfo user={user} reading={reading} />
         <ReceiptTotals reading={reading} tariff={safeTariff} />
         <ReceiptFooter />
         
-        {(reading.previous_reading ?? 0) === 0 && (
-          <div className="text-center mt-4 text-xs font-bold text-blue-600 uppercase tracking-widest">
-            Lectura Inicial / Conexión
+        {isReconexion && (
+          <div className="text-center mt-4 px-3 py-1.5 bg-amber-50 text-amber-800 rounded-xl text-[11px] font-black uppercase tracking-wider border border-amber-200 print:border-zinc-300">
+            Reactivación de Servicio — Incluye Reconexión (50%)
+          </div>
+        )}
+
+        {isPrimeraFactura && (
+          <div className="text-center mt-4 px-3 py-1.5 bg-blue-50 text-blue-700 rounded-xl text-[11px] font-black uppercase tracking-wider border border-blue-100/60 print:border-zinc-300">
+            Primera Factura — Incluye Conexión
           </div>
         )}
         
         <div className="flex justify-center mt-4">
           <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
             reading.status === 'paid' ? 'bg-green-100 text-green-700' :
-            reading.status === 'pending' ? 'bg-yellow-100 text-yellow-700' :
+            reading.status === 'pending' ? 'bg-amber-100 text-amber-700' :
             'bg-red-100 text-red-700'
           }`}>
             {reading.status === 'paid' ? '🟢 Pagado' : 
@@ -194,12 +177,15 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
         </div>
       </div>
 
-      <ReceiptActions 
-        onPrint={handlePrint}
-        onShare={share}
-        onDownload={download}
-        isProcessing={isProcessing}
-      />
+      {/* Botones de acción (Ocultos en impresión) */}
+      <div className="print:hidden">
+        <ReceiptActions 
+          onPrint={handlePrint}
+          onShare={share}
+          onDownload={download}
+          isProcessing={isProcessing}
+        />
+      </div>
     </div>
   );
 }

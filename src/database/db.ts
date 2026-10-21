@@ -2,6 +2,7 @@ import Dexie, { type Table } from 'dexie';
 import { v4 as uuidv4 } from 'uuid';
 
 export type UserCategory = 'Residencial' | 'Residencial Social' | 'Comercial' | 'Industrial';
+export type UserStatus = 'activo' | 'suspendido' | 'baja';
 
 export interface User {
   id: string;
@@ -9,10 +10,15 @@ export interface User {
   address: string;
   meter_id: string;
   category: UserCategory;
+  estado?: UserStatus;
+  motivo_suspension?: string;
+  fecha_suspension?: number | null;
+  fecha_reactivacion?: number | null;
   createdAt: number;
   uuid: string;
   updated_at: number;
   version: number;
+  deleted?: boolean;
 }
 
 export interface Meter {
@@ -31,9 +37,27 @@ export interface Meter {
 export interface InvoiceDetalle {
   cargo_fijo: number;
   conexion: number;
+  costo_conexion?: number;
+  reconexion?: number;
+  costo_reconexion?: number;
+  tipo_factura?: 'regular' | 'primera' | 'reconexion';
+  es_reconexion?: boolean;
   consumo_m3: number;
+  consumo_base: number;
+  monto_base: number;
+  consumo_exceso: number;
+  monto_exceso: number;
   costo_consumo: number;
+  es_primera_factura: boolean;
   total: number;
+  tarifa_aplicada?: {
+    categoria: UserCategory;
+    cargo_fijo: number;
+    conexion: number;
+    reconexion?: number;
+    base: number;
+    exceso: number;
+  };
 }
 
 export interface Reading {
@@ -41,6 +65,9 @@ export interface Reading {
   user_id: string;
   medidor_id?: string;
   factura_id?: string;
+  tipo_factura?: 'regular' | 'primera' | 'reconexion';
+  es_primera_factura?: boolean;
+  es_reconexion?: boolean;
   previous_reading: number;
   current_reading: number;
   consumption: number;
@@ -52,6 +79,16 @@ export interface Reading {
     fixed_charge: number;
     sewer_cost: number;
     conexion?: number;
+    costo_conexion?: number;
+    reconexion?: number;
+    costo_reconexion?: number;
+    tipo_factura?: 'regular' | 'primera' | 'reconexion';
+    es_reconexion?: boolean;
+    consumo_base?: number;
+    monto_base?: number;
+    consumo_exceso?: number;
+    monto_exceso?: number;
+    es_primera_factura?: boolean;
     total: number;
     tariff_id?: number;
     detalle?: InvoiceDetalle;
@@ -65,6 +102,9 @@ export interface Reading {
 export interface Invoice {
   id?: number;
   factura_id: string;
+  tipo_factura?: 'regular' | 'primera' | 'reconexion';
+  es_primera_factura?: boolean;
+  es_reconexion?: boolean;
   total: number;
   consumo: number;
   estado: 'pendiente' | 'pagado' | 'anulado';
@@ -74,12 +114,27 @@ export interface Invoice {
   lectura_id: number | string;
   fecha: number;
   date: number;
+  nombre?: string;
+  zona?: string;
+  categoria?: UserCategory;
+  lectura_anterior?: number;
+  lectura_actual?: number;
   detalle?: InvoiceDetalle;
   bill_details?: {
     water_cost: number;
     fixed_charge: number;
     sewer_cost: number;
     conexion?: number;
+    costo_conexion?: number;
+    reconexion?: number;
+    costo_reconexion?: number;
+    tipo_factura?: 'regular' | 'primera' | 'reconexion';
+    es_reconexion?: boolean;
+    consumo_base?: number;
+    monto_base?: number;
+    consumo_exceso?: number;
+    monto_exceso?: number;
+    es_primera_factura?: boolean;
     total: number;
     tariff_id?: number;
     detalle?: InvoiceDetalle;
@@ -96,6 +151,7 @@ export interface Tariff {
   costo_m3_base: number; // 0-20 m3
   costo_m3_exceso: number; // >20 m3
   tarifa_conexion: number;
+  tarifa_reconexion?: number; // Reconexión = 50% de conexión
   porcentaje_alcantarillado: number;
   fecha_inicio: number;
   fecha_fin: number;
@@ -183,6 +239,27 @@ export class AppDatabase extends Dexie {
         }
       } catch (err) {
         console.warn('Upgrade error in version 6:', err);
+      }
+    });
+
+    this.version(7).stores({
+      users: 'id, name, meter_id, category, estado, uuid',
+      medidores: 'id, meter_id, user_id, uuid',
+      readings: '++id, user_id, medidor_id, date, status, uuid, factura_id',
+      facturas: '++id, factura_id, usuario_id, user_id, medidor_id, lectura_id, fecha, estado, uuid',
+      tariffs: '++id, categoria, fecha_inicio, fecha_fin, uuid',
+      staff: '++id, username, role, uuid',
+      pending_sync: '++id, type, status, created_at'
+    }).upgrade(async (tx) => {
+      try {
+        const users = await tx.table('users').toArray();
+        for (const u of users) {
+          if (!u.estado) {
+            await tx.table('users').update(u.id, { estado: 'activo' });
+          }
+        }
+      } catch (err) {
+        console.warn('Upgrade error in version 7:', err);
       }
     });
   }
@@ -352,6 +429,18 @@ export async function seedDatabase() {
     }
   } catch (migrErr) {
     console.warn('Error sincronizando facturas existentes:', migrErr);
+  }
+
+  // Asegurar que todos los usuarios tengan estado 'activo' por defecto
+  try {
+    const allUsers = await db.users.toArray();
+    for (const u of allUsers) {
+      if (!u.estado) {
+        await db.users.update(u.id, { estado: 'activo' });
+      }
+    }
+  } catch (userStatusErr) {
+    console.warn('Error inicializando estados de usuario:', userStatusErr);
   }
 }
 

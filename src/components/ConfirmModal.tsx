@@ -7,9 +7,17 @@ interface ConfirmModalProps {
   onConfirm: () => void;
   title?: string;
   message?: string;
+  confirmText?: string;
 }
 
-export default function ConfirmModal({ isOpen, onClose, onConfirm, title = "¿Estás seguro?", message = "¿Seguro que deseas eliminar este registro?" }: ConfirmModalProps) {
+export default function ConfirmModal({ 
+  isOpen, 
+  onClose, 
+  onConfirm, 
+  title = "¿Estás seguro?", 
+  message = "¿Seguro que deseas eliminar este registro?",
+  confirmText = "Eliminar"
+}: ConfirmModalProps) {
   if (!isOpen) return null;
 
   return (
@@ -21,19 +29,19 @@ export default function ConfirmModal({ isOpen, onClose, onConfirm, title = "¿Es
           </div>
           <h2 className="text-xl font-black text-zinc-900">{title}</h2>
         </div>
-        <p className="text-zinc-500 font-medium mb-8">{message}</p>
+        <p className="text-zinc-500 font-medium mb-8 text-sm">{message}</p>
         <div className="flex gap-3">
           <button 
             onClick={onClose} 
-            className="flex-1 py-3 font-bold text-zinc-500 hover:bg-zinc-100 rounded-xl transition-all"
+            className="flex-1 py-3 font-bold text-zinc-500 hover:bg-zinc-100 rounded-xl transition-all text-sm"
           >
             Cancelar
           </button>
           <button 
             onClick={() => { onConfirm(); onClose(); }} 
-            className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-100"
+            className="flex-1 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-100 text-sm"
           >
-            Eliminar
+            {confirmText}
           </button>
         </div>
       </div>

@@ -29,6 +29,7 @@ export default function AdminPage() {
     costo_m3_base: 0,
     costo_m3_exceso: 0,
     tarifa_conexion: 0,
+    tarifa_reconexion: 0,
     porcentaje_alcantarillado: 20,
     fecha_inicio: new Date().toISOString().split('T')[0],
     fecha_fin: '2030-12-31'
@@ -46,14 +47,50 @@ export default function AdminPage() {
 
   const handleAddTariff = async (e: React.FormEvent) => {
     e.preventDefault();
+    const inicioMs = new Date(newTariff.fecha_inicio).getTime();
+    const finMs = new Date(newTariff.fecha_fin).getTime();
+
+    // Regla 3: Tarifa versionada: al crear Nueva Tarifa, cierra la anterior con fecha_fin = ayer
+    const inicioDate = new Date(newTariff.fecha_inicio);
+    const ayer = new Date(inicioDate);
+    ayer.setDate(ayer.getDate() - 1);
+    ayer.setHours(23, 59, 59, 999);
+    const ayerMs = ayer.getTime();
+
+    // Buscar tarifas vigentes de la misma categoría para cerrarlas
+    const existingTariffs = await db.tariffs
+      .where('categoria')
+      .equals(newTariff.categoria)
+      .toArray();
+
+    for (const oldTariff of existingTariffs) {
+      if (oldTariff.fecha_inicio <= inicioMs && oldTariff.fecha_fin >= ayerMs) {
+        const closedTariff = {
+          ...oldTariff,
+          fecha_fin: ayerMs,
+          updated_at: Date.now(),
+          version: (oldTariff.version || 1) + 1
+        };
+        await db.tariffs.update(oldTariff.id!, closedTariff);
+        await syncService.addToQueue('tarifa', closedTariff);
+      }
+    }
+
+    // Regla 4: Reconexión = 50% de conexión
+    const finalReconexion = newTariff.tarifa_reconexion > 0
+      ? newTariff.tarifa_reconexion
+      : Math.round(Number(newTariff.tarifa_conexion) * 0.5 * 100) / 100;
+
     const tariffData = {
       ...newTariff,
-      fecha_inicio: new Date(newTariff.fecha_inicio).getTime(),
-      fecha_fin: new Date(newTariff.fecha_fin).getTime(),
+      tarifa_reconexion: finalReconexion,
+      fecha_inicio: inicioMs,
+      fecha_fin: finMs,
       uuid: uuidv4(),
       updated_at: Date.now(),
       version: 1
     };
+
     const id = await db.tariffs.add(tariffData);
     await syncService.addToQueue('tarifa', { ...tariffData, id });
     setIsAddingTariff(false);
@@ -63,6 +100,7 @@ export default function AdminPage() {
       costo_m3_base: 0,
       costo_m3_exceso: 0,
       tarifa_conexion: 0,
+      tarifa_reconexion: 0,
       porcentaje_alcantarillado: 20,
       fecha_inicio: new Date().toISOString().split('T')[0],
       fecha_fin: '2030-12-31'
@@ -265,7 +303,7 @@ export default function AdminPage() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-8 flex-1 lg:max-w-2xl">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-4 sm:gap-6 flex-1 lg:max-w-3xl">
                 <div className="text-right">
                   <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Cargo Fijo</p>
                   <p className="font-bold text-zinc-900">{formatCurrency(tariff.cargo_fijo_mensual)}</p>
@@ -273,6 +311,10 @@ export default function AdminPage() {
                 <div className="text-right">
                   <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Conexión</p>
                   <p className="font-bold text-zinc-900">{formatCurrency(tariff.tarifa_conexion)}</p>
+                </div>
+                <div className="text-right">
+                  <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Reconexión (50%)</p>
+                  <p className="font-bold text-blue-600">{formatCurrency(tariff.tarifa_reconexion ?? Math.round((tariff.tarifa_conexion || 0) * 0.5 * 100) / 100)}</p>
                 </div>
                 <div className="text-right">
                   <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Base (0-20m³)</p>
@@ -378,7 +420,35 @@ export default function AdminPage() {
                 </div>
                 <div className="space-y-2">
                   <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Tarifa Conexión (Bs)</label>
-                  <input required type="number" step="0.01" value={newTariff.tarifa_conexion} onChange={e => setNewTariff({...newTariff, tarifa_conexion: Number(e.target.value)})} className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:border-blue-500" />
+                  <input 
+                    required 
+                    type="number" 
+                    step="0.01" 
+                    value={newTariff.tarifa_conexion} 
+                    onChange={e => {
+                      const conVal = Number(e.target.value);
+                      setNewTariff({
+                        ...newTariff, 
+                        tarifa_conexion: conVal,
+                        tarifa_reconexion: Math.round(conVal * 0.5 * 100) / 100
+                      });
+                    }} 
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:border-blue-500" 
+                  />
+                </div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Reconexión (Bs)</label>
+                    <span className="text-[10px] text-blue-600 font-bold">50% conexión</span>
+                  </div>
+                  <input 
+                    required 
+                    type="number" 
+                    step="0.01" 
+                    value={newTariff.tarifa_reconexion} 
+                    onChange={e => setNewTariff({...newTariff, tarifa_reconexion: Number(e.target.value)})} 
+                    className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:outline-none focus:border-blue-500" 
+                  />
                 </div>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

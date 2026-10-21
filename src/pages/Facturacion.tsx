@@ -210,11 +210,23 @@ export default function FacturacionPage() {
                       {/* Usuario */}
                       <td className="py-4 px-6">
                         <div>
-                          <p className="font-bold text-zinc-900 leading-snug">
-                            {inv.userName}
-                          </p>
+                          <div className="flex items-center gap-2">
+                            <p className="font-bold text-zinc-900 leading-snug">
+                              {inv.userName}
+                            </p>
+                            {inv.tipo_factura === 'reconexion' && (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-amber-100 text-amber-800 border border-amber-200">
+                                Reconexión
+                              </span>
+                            )}
+                            {inv.es_primera_factura && inv.tipo_factura !== 'reconexion' && (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase bg-blue-100 text-blue-800 border border-blue-200">
+                                Conexión
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-zinc-400 font-medium mt-0.5">
-                            {formatDate(inv.date)}
+                            {formatDate(inv.date)} • Medidor: {inv.meterId}
                           </p>
                         </div>
                       </td>
