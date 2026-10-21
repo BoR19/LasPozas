@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Reading } from '../database/db';
+import { syncService } from '../services/syncService';
 import { v4 as uuidv4 } from 'uuid';
 import { getActiveTariff, calculateBill } from '../services/billingService';
 import { formatDate, formatCurrency } from '../lib/utils';
@@ -24,8 +25,27 @@ export default function UserDetailPage() {
   const handleDelete = async () => {
     if (!isAdmin || !id) return;
     try {
+      const userToDelete = await db.users.get(id);
+      const readingsToDelete = await db.readings.where('user_id').equals(id).toArray();
       await db.readings.where('user_id').equals(id).delete();
       await db.users.delete(id);
+
+      if (userToDelete) {
+        await syncService.addToQueue('user', {
+          ...userToDelete,
+          deleted: true,
+          updated_at: Date.now()
+        });
+      }
+
+      for (const r of readingsToDelete) {
+        await syncService.addToQueue('reading', {
+          ...r,
+          deleted: true,
+          updated_at: Date.now()
+        });
+      }
+
       navigate('/users');
     } catch (err) {
       console.error('Error al eliminar:', err);
@@ -81,19 +101,22 @@ export default function UserDetailPage() {
       const esPrimeraLectura = !latestReading || latestReading.current_reading === 0;
       const bill = calculateBill(consumption, tariff, esPrimeraLectura);
 
-      await db.readings.add({
+      const readingData = {
         user_id: user.id,
         previous_reading: latestReading?.current_reading || 0,
         current_reading: current,
         consumption,
         date: Date.now(),
-        status: 'pending',
+        status: 'pending' as const,
         bill_details: bill,
         imagen: capturedImage || undefined,
         uuid: uuidv4(),
         updated_at: Date.now(),
         version: 1
-      });
+      };
+
+      await db.readings.add(readingData);
+      await syncService.addToQueue('reading', readingData);
 
       setSaveSuccess(true);
       setTimeout(() => {
@@ -110,7 +133,11 @@ export default function UserDetailPage() {
   };
 
   const markAsPaid = async (readingId: number) => {
-    await db.readings.update(readingId, { status: 'paid' });
+    await db.readings.update(readingId, { status: 'paid', updated_at: Date.now() });
+    const updated = await db.readings.get(readingId);
+    if (updated) {
+      await syncService.addToQueue('reading', updated);
+    }
   };
 
   const deleteUser = async () => {

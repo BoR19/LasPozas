@@ -1,6 +1,6 @@
 import React, { ReactNode } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { Users, Droplets, Settings, Search, Camera, LogOut, Home, FileText, User as UserIcon } from 'lucide-react';
+import { Users, Droplets, Settings, Search, Camera, LogOut, Home, FileText, User as UserIcon, CreditCard } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { useAuth } from '../hooks/useAuth';
 import MobileTopBar from './MobileTopBar';
@@ -23,6 +23,7 @@ export default function Layout({ children }: LayoutProps) {
   const navItems = [
     { to: '/', icon: Home, label: 'Inicio' },
     { to: '/users', icon: Users, label: 'Usuarios' },
+    { to: '/facturacion', icon: CreditCard, label: 'Facturación' },
     { to: '/consultation', icon: FileText, label: 'Historial' },
     ...(isAdmin ? [{ to: '/admin', icon: Settings, label: 'Configuración' }] : [])
   ];
@@ -115,9 +116,20 @@ export default function Layout({ children }: LayoutProps) {
           </div>
 
           {/* Spacer for Floating Button */}
-          <div className="w-20" />
+          <div className="w-14" />
 
           <div className="flex flex-1 justify-around items-center">
+            <NavLink
+              to="/facturacion"
+              className={({ isActive }) => cn(
+                "flex flex-col items-center gap-1 p-2 rounded-xl transition-all active:scale-90 min-w-0",
+                isActive ? "text-blue-600" : "text-zinc-400"
+              )}
+            >
+              <CreditCard className="w-5 h-5" />
+              <span className="text-[9px] font-black uppercase tracking-tight">Facturas</span>
+            </NavLink>
+
             <NavLink
               to="/consultation"
               className={({ isActive }) => cn(
@@ -129,22 +141,10 @@ export default function Layout({ children }: LayoutProps) {
               <span className="text-[9px] font-black uppercase tracking-tight">Historial</span>
             </NavLink>
 
-            {isAdmin && (
-              <NavLink
-                to="/admin"
-                className={({ isActive }) => cn(
-                  "flex flex-col items-center gap-1 p-2 rounded-xl transition-all active:scale-90 min-w-0",
-                  isActive ? "text-blue-600" : "text-zinc-400"
-                )}
-              >
-                <Settings className="w-5 h-5" />
-                <span className="text-[9px] font-black uppercase tracking-tight">Ajustes</span>
-              </NavLink>
-            )}
-
             <button 
               onClick={handleLogout}
               className="flex flex-col items-center gap-1 p-2 text-zinc-400 active:scale-90 min-w-0"
+              title="Cerrar sesión"
             >
               <LogOut className="w-5 h-5" />
               <span className="text-[9px] font-black uppercase tracking-tight">Salir</span>

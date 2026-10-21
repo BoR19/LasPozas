@@ -26,6 +26,8 @@ export default function UsersPage() {
     try {
       const userToDelete = await db.users.get(deleteTarget);
       if (userToDelete) {
+        const relatedReadings = await db.readings.where('user_id').equals(deleteTarget).toArray();
+        await db.readings.where('user_id').equals(deleteTarget).delete();
         await db.users.delete(deleteTarget);
         
         // Registrar eliminación para sincronizar
@@ -34,6 +36,14 @@ export default function UsersPage() {
           deleted: true, // Marcador para sincronizar la eliminación
           updated_at: Date.now()
         });
+
+        for (const r of relatedReadings) {
+          await syncService.addToQueue('reading', {
+            ...r,
+            deleted: true,
+            updated_at: Date.now()
+          });
+        }
       }
     } catch (err) {
       console.error('Error al eliminar:', err);

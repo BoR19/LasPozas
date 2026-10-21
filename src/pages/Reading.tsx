@@ -83,26 +83,33 @@ export default function ReadingPage() {
               <Camera className="w-5 h-5" />
               Nueva Lectura
             </button>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-2.5">
               <button 
                 onClick={() => navigate('/users')}
-                className="flex items-center justify-center gap-2 p-4 bg-white/20 text-white rounded-2xl font-black hover:bg-white/30 transition-all active:scale-95 backdrop-blur-sm"
+                className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-3 bg-white/20 text-white rounded-2xl font-bold hover:bg-white/30 transition-all active:scale-95 backdrop-blur-sm text-xs sm:text-sm"
               >
-                <Users className="w-5 h-5" />
+                <Users className="w-4 h-4" />
                 Usuarios
               </button>
               <button 
-                onClick={() => navigate('/consultation')}
-                className="flex items-center justify-center gap-2 p-4 bg-white/20 text-white rounded-2xl font-black hover:bg-white/30 transition-all active:scale-95 backdrop-blur-sm"
+                onClick={() => navigate('/facturacion')}
+                className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-3 bg-white/20 text-white rounded-2xl font-bold hover:bg-white/30 transition-all active:scale-95 backdrop-blur-sm text-xs sm:text-sm"
               >
-                <History className="w-5 h-5" />
+                <CreditCard className="w-4 h-4" />
+                Facturación
+              </button>
+              <button 
+                onClick={() => navigate('/consultation')}
+                className="flex flex-col sm:flex-row items-center justify-center gap-1.5 p-3 bg-white/20 text-white rounded-2xl font-bold hover:bg-white/30 transition-all active:scale-95 backdrop-blur-sm text-xs sm:text-sm"
+              >
+                <History className="w-4 h-4" />
                 Historial
               </button>
               <button 
                 onClick={() => syncService.triggerSync()}
-                className="col-span-2 flex items-center justify-center gap-2 p-4 bg-white/20 text-white rounded-2xl font-black hover:bg-white/30 transition-all active:scale-95 backdrop-blur-sm"
+                className="col-span-3 flex items-center justify-center gap-2 p-3 bg-white/10 text-white rounded-2xl font-bold hover:bg-white/20 transition-all active:scale-95 backdrop-blur-sm text-xs"
               >
-                <RefreshCw className="w-5 h-5" />
+                <RefreshCw className="w-4 h-4" />
                 Sincronizar ahora
               </button>
             </div>

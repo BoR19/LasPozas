@@ -13,6 +13,7 @@ import { LogIn } from 'lucide-react';
 import ConsultationPage from './pages/Consultation';
 
 import ReadingPage from './pages/Reading';
+import FacturacionPage from './pages/Facturacion';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { useSync } from './hooks/useSync';
 import { ErrorBoundary } from './components/ErrorBoundary';
@@ -59,6 +60,7 @@ function AppContent() {
           <Route path="/" element={user ? <Layout><ReadingPage /></Layout> : <Navigate to="/login" />} />
           <Route path="/users" element={user ? <Layout><UsersPage /></Layout> : <Navigate to="/login" />} />
           <Route path="/users/:id" element={user ? <Layout><UserDetailPage /></Layout> : <Navigate to="/login" />} />
+          <Route path="/facturacion" element={user ? <Layout><FacturacionPage /></Layout> : <Navigate to="/login" />} />
           <Route path="/recibo/:id" element={user ? <Layout><ReceiptPage /></Layout> : <Navigate to="/login" />} />
           <Route path="/admin" element={user ? <Layout><AdminPage /></Layout> : <Navigate to="/login" />} />
           
