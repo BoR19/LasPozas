@@ -9,15 +9,23 @@ export default function LoginPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError('');
-    const success = await login(username, password);
-    if (!success) {
-      setLoginError('Credenciales incorrectas');
-    } else {
-      navigate('/');
+    setIsSubmitting(true);
+    try {
+      const success = await login(username, password);
+      if (!success) {
+        setLoginError('Credenciales incorrectas. Verifique su usuario y contraseña.');
+      } else {
+        navigate('/');
+      }
+    } catch (err) {
+      setLoginError('Error de conexión o autenticación. Intente nuevamente.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -48,8 +56,11 @@ export default function LoginPage() {
                   type="text"
                   value={username}
                   onChange={e => setUsername(e.target.value)}
-                  className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:border-blue-500 transition-all"
-                  placeholder="Usuario"
+                  disabled={isSubmitting}
+                  className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:border-blue-500 transition-all disabled:opacity-50"
+                  placeholder="Usuario (ej. @dmin& o lector)"
+                  autoCapitalize="none"
+                  autoCorrect="off"
                 />
               </div>
             </div>
@@ -62,22 +73,24 @@ export default function LoginPage() {
                   type="password"
                   value={password}
                   onChange={e => setPassword(e.target.value)}
-                  className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:border-blue-500 transition-all"
+                  disabled={isSubmitting}
+                  className="w-full pl-12 pr-4 py-4 bg-zinc-50 border border-zinc-200 rounded-2xl focus:outline-none focus:border-blue-500 transition-all disabled:opacity-50"
                   placeholder="••••••••"
                 />
               </div>
             </div>
 
             {loginError && (
-              <p className="text-red-500 text-sm font-bold text-center">{loginError}</p>
+              <p className="text-red-500 text-sm font-bold text-center bg-red-50 py-2.5 px-4 rounded-xl border border-red-100">{loginError}</p>
             )}
 
             <button 
               type="submit"
-              className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl hover:bg-blue-700 transition-all active:scale-[0.98] shadow-xl shadow-blue-100 flex items-center justify-center gap-2"
+              disabled={isSubmitting}
+              className="w-full py-4 bg-blue-600 text-white font-black rounded-2xl hover:bg-blue-700 transition-all active:scale-[0.98] shadow-xl shadow-blue-100 flex items-center justify-center gap-2 disabled:opacity-50 cursor-pointer"
             >
               <LogIn className="w-5 h-5" />
-              Iniciar Sesión
+              {isSubmitting ? 'Verificando...' : 'Iniciar Sesión'}
             </button>
           </form>
 

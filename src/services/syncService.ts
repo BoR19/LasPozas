@@ -25,11 +25,12 @@ const getTable = (name: string) => {
   if (name === 'tarifa' || name === 'tarifas') return localDb.tariffs;
   if (name === 'user' || name === 'users') return localDb.users;
   if (name === 'reading' || name === 'readings') return localDb.readings;
+  if (name === 'staff' || name === 'staffs') return localDb.staff;
   return (localDb as any)[name];
 };
 
 export const syncService = {
-  async addToQueue(type: 'reading' | 'user' | 'tarifa', data: any) {
+  async addToQueue(type: 'reading' | 'user' | 'tarifa' | 'staff', data: any) {
     const processedData = { ...data };
     if (processedData.imagen instanceof Blob) {
       processedData.imagen = await blobToBase64(processedData.imagen);
@@ -52,7 +53,7 @@ export const syncService = {
     for (const item of pending) {
       try {
         const data = JSON.parse(item.data);
-        const colName = item.type === 'tarifa' ? 'tarifas' : `${item.type}s`;
+        const colName = item.type === 'tarifa' ? 'tarifas' : item.type === 'staff' ? 'staff' : `${item.type}s`;
         const itemUuid = data.uuid;
 
         if (itemUuid) {
@@ -104,7 +105,7 @@ export const syncService = {
   },
 
   initRealtimeSync() {
-    const collections = ['users', 'readings', 'tarifas'];
+    const collections = ['users', 'readings', 'tarifas', 'staff'];
     
     collections.forEach(colName => {
       onSnapshot(collection(firestoreDb, colName), async (snapshot) => {
@@ -159,6 +160,8 @@ export const syncService = {
                   objToPut.id = existing.id;
                 } else if (colName === 'users') {
                   objToPut.id = data.id || data.uuid;
+                } else {
+                  delete objToPut.id;
                 }
                 delete objToPut.deleted;
                 await table.put(objToPut);

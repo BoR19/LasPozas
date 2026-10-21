@@ -64,7 +64,7 @@ export interface Staff {
 
 export interface PendingSync {
   id?: number;
-  type: 'reading' | 'user' | 'tarifa';
+  type: 'reading' | 'user' | 'tarifa' | 'staff';
   data: string; // JSON string
   status: 'pending' | 'synced';
   created_at: number;
@@ -93,9 +93,30 @@ export class AppDatabase extends Dexie {
 
 export const db = new AppDatabase();
 
-// Password obfuscation (Basic security improvement)
-export const encodePassword = (password: string) => btoa(password);
-export const decodePassword = (encoded: string) => atob(encoded);
+// Password obfuscation (Safe against UTF-8 and special characters)
+export const encodePassword = (password: string) => {
+  try {
+    return btoa(encodeURIComponent(password));
+  } catch {
+    try {
+      return btoa(password);
+    } catch {
+      return password;
+    }
+  }
+};
+
+export const decodePassword = (encoded: string) => {
+  try {
+    return decodeURIComponent(atob(encoded));
+  } catch {
+    try {
+      return atob(encoded);
+    } catch {
+      return encoded;
+    }
+  }
+};
 
 // Initial data for tariffs and admin
 export async function seedDatabase() {
@@ -158,35 +179,33 @@ export async function seedDatabase() {
     }
   }
 
-// Check for existing admin and update if necessary
-  const allAdmins = await db.staff.where('role').equals('admin').toArray();
-  if (allAdmins.length > 0) {
-    // Keep the first one, delete the rest
-    const [keep, ...rest] = allAdmins;
-    for (const admin of rest) {
-      await db.staff.delete(admin.id!);
-    }
-  } else {
-    // Create default admin if none exist
+  // Ensure default admin exists without deleting any user-created staff or admins
+  const defaultAdmin = await db.staff.where('username').equals('@dmin&').first();
+  if (!defaultAdmin) {
     await db.staff.add({
       username: '@dmin&',
       password: encodePassword('@dmin&1#'),
       role: 'admin',
       name: 'Administrador',
-      uuid: uuidv4(),
-      updated_at: Date.now(),
+      uuid: 'default-admin-tolomosita-oeste',
+      updated_at: 1704067200000,
       version: 1
     });
   }
 
-  // Migrate other staff passwords to encoded format if they are plain text
+  // Normalize staff passwords safely
   const allStaff = await db.staff.toArray();
   for (const s of allStaff) {
+    if (!s.password) continue;
     try {
-      // If it can't be decoded, it's probably plain text
-      atob(s.password);
+      // Test if decode succeeds
+      const decoded = decodePassword(s.password);
+      if (decoded === s.password && s.password.length > 0) {
+        // Plaintext detected, encode it
+        await db.staff.update(s.id!, { password: encodePassword(s.password) });
+      }
     } catch (e) {
-      // It's plain text, encode it
+      // If error occurred, encode as fallback
       await db.staff.update(s.id!, { password: encodePassword(s.password) });
     }
   }
@@ -196,9 +215,17 @@ export async function changePassword(staffId: number, currentPassword: string, n
   const staff = await db.staff.get(staffId);
   if (!staff) throw new Error('Usuario no encontrado');
 
-  if (decodePassword(staff.password) !== currentPassword) {
+  const matchesCurrent = 
+    staff.password === currentPassword ||
+    staff.password === encodePassword(currentPassword) ||
+    decodePassword(staff.password) === currentPassword;
+
+  if (!matchesCurrent) {
     throw new Error('Contraseña actual incorrecta');
   }
 
-  await db.staff.update(staffId, { password: encodePassword(newPassword) });
+  await db.staff.update(staffId, { 
+    password: encodePassword(newPassword),
+    updated_at: Date.now()
+  });
 }

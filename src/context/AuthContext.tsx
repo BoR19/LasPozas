@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
-import { db, type Staff, encodePassword } from '../database/db';
+import { db, type Staff, encodePassword, decodePassword } from '../database/db';
+import { db as firestoreDb } from '../lib/firebase';
+import { collection, getDocs } from 'firebase/firestore';
 
 interface AuthContextType {
   user: Staff | null;
@@ -28,17 +30,99 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setLoading(false);
   }, []);
 
-  const login = async (username: string, password: string): Promise<boolean> => {
-    const staff = await db.staff
-      .where('username')
-      .equals(username)
-      .first();
+  const verifyPassword = (enteredPassword: string, storedPassword: string): boolean => {
+    if (!storedPassword) return false;
+    const raw = enteredPassword;
+    const trimmed = enteredPassword.trim();
 
-    if (staff && staff.password === encodePassword(password)) {
+    // 1. Direct plain text match
+    if (storedPassword === raw || storedPassword === trimmed) return true;
+
+    // 2. Encoded match via encodePassword
+    if (storedPassword === encodePassword(raw) || storedPassword === encodePassword(trimmed)) return true;
+
+    // 3. Raw standard btoa match
+    try {
+      if (storedPassword === btoa(raw) || storedPassword === btoa(trimmed)) return true;
+    } catch {}
+
+    // 4. Decoded stored match
+    try {
+      const dec = decodePassword(storedPassword);
+      if (dec === raw || dec === trimmed) return true;
+    } catch {}
+
+    try {
+      const decBtoa = atob(storedPassword);
+      if (decBtoa === raw || decBtoa === trimmed) return true;
+    } catch {}
+
+    return false;
+  };
+
+  const login = async (username: string, password: string): Promise<boolean> => {
+    const rawInput = (username || '').trim();
+    if (!rawInput) return false;
+
+    const normalizedInput = rawInput.startsWith('@') ? rawInput.slice(1).toLowerCase() : rawInput.toLowerCase();
+
+    // Helper to test if a staff record matches the input username
+    const matchesUsername = (s: Staff) => {
+      const cleanStored = (s.username || '').trim();
+      const normStored = cleanStored.startsWith('@') ? cleanStored.slice(1).toLowerCase() : cleanStored.toLowerCase();
+      return cleanStored.toLowerCase() === rawInput.toLowerCase() ||
+             normStored === normalizedInput ||
+             cleanStored.toLowerCase() === `@${normalizedInput}` ||
+             `@${normStored}` === normalizedInput;
+    };
+
+    // 1. Check local Dexie first
+    const allLocalStaff = await db.staff.toArray();
+    let staff = allLocalStaff.find(matchesUsername);
+
+    // 2. If not found locally and device is online, check Firestore 'staff' collection
+    // (Crucial for cross-device usage: when reader is added on PC and logged in on mobile/tablet)
+    if (!staff && navigator.onLine) {
+      try {
+        const staffCol = collection(firestoreDb, 'staff');
+        const snap = await getDocs(staffCol);
+        for (const docSnap of snap.docs) {
+          const remoteData = docSnap.data() as Staff & { deleted?: boolean };
+          if (remoteData && !remoteData.deleted) {
+            // Cache to local Dexie
+            const existingLocal = await db.staff.where('uuid').equals(remoteData.uuid || docSnap.id).first();
+            if (!existingLocal) {
+              const newId = await db.staff.add({
+                username: remoteData.username,
+                name: remoteData.name,
+                role: remoteData.role,
+                password: remoteData.password,
+                uuid: remoteData.uuid || docSnap.id,
+                updated_at: remoteData.updated_at || Date.now(),
+                version: remoteData.version || 1
+              });
+              remoteData.id = newId;
+            } else {
+              await db.staff.update(existingLocal.id!, remoteData);
+              remoteData.id = existingLocal.id;
+            }
+
+            if (matchesUsername(remoteData)) {
+              staff = remoteData;
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Error fetching staff from Firestore on login:', err);
+      }
+    }
+
+    if (staff && verifyPassword(password, staff.password)) {
       setUser(staff);
       localStorage.setItem('aqua_user', JSON.stringify(staff));
       return true;
     }
+
     return false;
   };
 

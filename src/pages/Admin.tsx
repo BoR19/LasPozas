@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Tariff, type UserCategory, type Staff, encodePassword, changePassword } from '../database/db';
+import { syncService } from '../services/syncService';
 import { v4 as uuidv4 } from 'uuid';
 import { formatDate, formatCurrency } from '../lib/utils';
 import ConfirmModal from '../components/ConfirmModal';
@@ -45,14 +46,16 @@ export default function AdminPage() {
 
   const handleAddTariff = async (e: React.FormEvent) => {
     e.preventDefault();
-    await db.tariffs.add({
+    const tariffData = {
       ...newTariff,
       fecha_inicio: new Date(newTariff.fecha_inicio).getTime(),
       fecha_fin: new Date(newTariff.fecha_fin).getTime(),
       uuid: uuidv4(),
       updated_at: Date.now(),
       version: 1
-    });
+    };
+    const id = await db.tariffs.add(tariffData);
+    await syncService.addToQueue('tarifa', { ...tariffData, id });
     setIsAddingTariff(false);
     setNewTariff({
       categoria: 'Residencial',
@@ -68,13 +71,18 @@ export default function AdminPage() {
 
   const handleAddStaff = async (e: React.FormEvent) => {
     e.preventDefault();
-    await db.staff.add({
-      ...newStaff,
-      password: encodePassword(newStaff.password),
+    const cleanUsername = newStaff.username.trim();
+    const staffData: Omit<Staff, 'id'> = {
+      username: cleanUsername,
+      name: newStaff.name.trim(),
+      role: newStaff.role,
+      password: encodePassword(newStaff.password.trim()),
       uuid: uuidv4(),
       updated_at: Date.now(),
       version: 1
-    });
+    };
+    const id = await db.staff.add(staffData as Staff);
+    await syncService.addToQueue('staff', { ...staffData, id });
     setIsAddingStaff(false);
     setNewStaff({ username: '', password: '', role: 'lector', name: '' });
   };
@@ -99,6 +107,10 @@ export default function AdminPage() {
       if (!staffUser) throw new Error('Usuario no encontrado');
       
       await changePassword(staffUser.id!, passwordData.currentPassword, passwordData.newPassword);
+      const updatedStaff = await db.staff.get(staffUser.id!);
+      if (updatedStaff) {
+        await syncService.addToQueue('staff', { ...updatedStaff, updated_at: Date.now() });
+      }
       setPasswordSuccess('Contraseña actualizada correctamente');
       setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
     } catch (err) {
@@ -114,8 +126,24 @@ export default function AdminPage() {
 
     try {
       if (deleteTarget.type === 'tariff') {
+        const item = await db.tariffs.get(deleteTarget.id);
+        if (item) {
+          await syncService.addToQueue('tarifa', {
+            ...item,
+            deleted: true,
+            updated_at: Date.now()
+          });
+        }
         await db.tariffs.delete(deleteTarget.id);
       } else {
+        const item = await db.staff.get(deleteTarget.id);
+        if (item) {
+          await syncService.addToQueue('staff', {
+            ...item,
+            deleted: true,
+            updated_at: Date.now()
+          });
+        }
         await db.staff.delete(deleteTarget.id);
       }
       // UI refresh is handled by useLiveQuery
@@ -185,13 +213,16 @@ export default function AdminPage() {
                 </div>
                 <div>
                   <p className="font-bold text-zinc-900">{s.name}</p>
-                  <p className="text-xs text-zinc-400 font-medium tracking-wide uppercase">{s.role} • @{s.username}</p>
+                  <p className="text-xs text-zinc-400 font-medium tracking-wide uppercase">
+                    {s.role} • {s.username.startsWith('@') ? s.username : `@${s.username}`}
+                  </p>
                 </div>
               </div>
-              {s.username !== '@dmin&' && (
+              {s.username.toLowerCase() !== '@dmin&' && (
                 <button 
                   onClick={() => confirmDelete(s.id!, 'staff')}
-                  className="p-2 text-red-400 hover:text-red-600 opacity-0 group-hover:opacity-100 transition-all"
+                  className="p-2 text-red-500 hover:text-red-700 sm:opacity-0 sm:group-hover:opacity-100 transition-all cursor-pointer"
+                  title="Eliminar personal"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>

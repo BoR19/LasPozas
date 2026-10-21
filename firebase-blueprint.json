@@ -1,0 +1,90 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A registered community water customer/subscriber.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Customer ID (e.g. USR-1234)" },
+        "name": { "type": "string", "description": "Full name of the subscriber" },
+        "address": { "type": "string", "description": "Subscriber address" },
+        "meter_id": { "type": "string", "description": "Water meter identification number" },
+        "category": { "type": "string", "enum": ["Residencial", "Residencial Social", "Comercial", "Industrial"], "description": "Tariff category" },
+        "createdAt": { "type": "number", "description": "Creation timestamp in milliseconds" },
+        "uuid": { "type": "string", "description": "Global unique identifier" },
+        "updated_at": { "type": "number", "description": "Last update timestamp" },
+        "version": { "type": "number", "description": "Record version" }
+      },
+      "required": ["id", "name", "address", "meter_id", "category", "uuid"]
+    },
+    "Reading": {
+      "title": "Reading",
+      "description": "Monthly water meter reading and consumption record.",
+      "type": "object",
+      "properties": {
+        "user_id": { "type": "string", "description": "Referenced customer ID" },
+        "previous_reading": { "type": "number", "description": "Previous meter reading in m3" },
+        "current_reading": { "type": "number", "description": "Current meter reading in m3" },
+        "consumption": { "type": "number", "description": "Calculated consumption in m3" },
+        "date": { "type": "number", "description": "Reading date timestamp" },
+        "status": { "type": "string", "enum": ["paid", "pending", "overdue"], "description": "Payment status" },
+        "uuid": { "type": "string", "description": "Global unique identifier" },
+        "updated_at": { "type": "number", "description": "Last update timestamp" },
+        "version": { "type": "number", "description": "Record version" }
+      },
+      "required": ["user_id", "previous_reading", "current_reading", "consumption", "date", "status", "uuid"]
+    },
+    "Tariff": {
+      "title": "Tariff",
+      "description": "Water service pricing tier definitions.",
+      "type": "object",
+      "properties": {
+        "categoria": { "type": "string", "description": "Category name" },
+        "cargo_fijo_mensual": { "type": "number", "description": "Monthly fixed service fee" },
+        "costo_m3_base": { "type": "number", "description": "Base rate per m3 (0-20 m3)" },
+        "costo_m3_exceso": { "type": "number", "description": "Excess rate per m3 (>20 m3)" },
+        "tarifa_conexion": { "type": "number", "description": "Connection fee" },
+        "porcentaje_alcantarillado": { "type": "number", "description": "Sewer percentage surcharge" },
+        "fecha_inicio": { "type": "number", "description": "Start validity timestamp" },
+        "fecha_fin": { "type": "number", "description": "End validity timestamp" },
+        "uuid": { "type": "string", "description": "Global unique identifier" },
+        "updated_at": { "type": "number", "description": "Last update timestamp" },
+        "version": { "type": "number", "description": "Record version" }
+      },
+      "required": ["categoria", "cargo_fijo_mensual", "costo_m3_base", "costo_m3_exceso", "uuid"]
+    },
+    "Staff": {
+      "title": "Staff",
+      "description": "System operator credentials and roles (admins and meter readers).",
+      "type": "object",
+      "properties": {
+        "username": { "type": "string", "description": "Unique system username" },
+        "password": { "type": "string", "description": "Obfuscated password hash" },
+        "role": { "type": "string", "enum": ["admin", "lector"], "description": "Assigned access role" },
+        "name": { "type": "string", "description": "Full staff name" },
+        "uuid": { "type": "string", "description": "Global unique identifier" },
+        "updated_at": { "type": "number", "description": "Last update timestamp" },
+        "version": { "type": "number", "description": "Record version" }
+      },
+      "required": ["username", "password", "role", "name", "uuid"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Subscribers collection"
+    },
+    "/readings/{readingId}": {
+      "schema": { "$ref": "#/entities/Reading" },
+      "description": "Meter reading records"
+    },
+    "/tarifas/{tarifaId}": {
+      "schema": { "$ref": "#/entities/Tariff" },
+      "description": "Active tariff structures"
+    },
+    "/staff/{staffId}": {
+      "schema": { "$ref": "#/entities/Staff" },
+      "description": "Staff credentials and roles"
+    }
+  }
+}

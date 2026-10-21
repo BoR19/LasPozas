@@ -1,13 +1,28 @@
 <!doctype html>
-<html lang="en">
+<html lang="es">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <title>Tolomosita Oeste AquaLectura</title>
+    <meta name="description" content="Offline-first water meter reading and billing system for community management." />
+    <meta property="og:title" content="Tolomosita Oeste AquaLectura" />
+    <meta property="og:description" content="Offline-first water meter reading and billing system for community management." />
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <script>
+      // Gracefully prevent unhandled websocket rejection logs from dev server proxy
+      window.addEventListener('unhandledrejection', function(event) {
+        if (event.reason && (
+          event.reason.message?.includes('WebSocket') || 
+          event.reason.toString?.().includes('WebSocket')
+        )) {
+          event.preventDefault();
+        }
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-
