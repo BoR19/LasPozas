@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useLiveQuery } from 'dexie-react-hooks';
-import { db, type Reading } from '../database/db';
+import { db, type Reading, type Invoice } from '../database/db';
 import { syncService } from '../services/syncService';
 import { v4 as uuidv4 } from 'uuid';
 import { getActiveTariff, calculateBill } from '../services/billingService';
-import { formatDate, formatCurrency } from '../lib/utils';
+import { formatDate, formatCurrency, generateId } from '../lib/utils';
 import ConfirmModal from '../components/ConfirmModal';
-import { ArrowLeft, Camera, Plus, History, Receipt as ReceiptIcon, Trash2, CheckCircle2, Clock, AlertCircle, Tag, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Camera, Plus, History, Receipt as ReceiptIcon, Trash2, CheckCircle2, Clock, AlertCircle, Tag, RefreshCw, DollarSign } from 'lucide-react';
 import CameraOCR from '../components/CameraOCR';
 import Receipt from '../components/Receipt/Receipt';
 import { cn } from '../lib/utils';
@@ -27,7 +27,12 @@ export default function UserDetailPage() {
     try {
       const userToDelete = await db.users.get(id);
       const readingsToDelete = await db.readings.where('user_id').equals(id).toArray();
+      const facturasToDelete = await db.facturas.where('usuario_id').equals(id).toArray();
+      const medidoresToDelete = await db.medidores.where('user_id').equals(id).toArray();
+
       await db.readings.where('user_id').equals(id).delete();
+      await db.facturas.where('usuario_id').equals(id).delete();
+      await db.medidores.where('user_id').equals(id).delete();
       await db.users.delete(id);
 
       if (userToDelete) {
@@ -41,6 +46,22 @@ export default function UserDetailPage() {
       for (const r of readingsToDelete) {
         await syncService.addToQueue('reading', {
           ...r,
+          deleted: true,
+          updated_at: Date.now()
+        });
+      }
+
+      for (const f of facturasToDelete) {
+        await syncService.addToQueue('factura', {
+          ...f,
+          deleted: true,
+          updated_at: Date.now()
+        });
+      }
+
+      for (const m of medidoresToDelete) {
+        await syncService.addToQueue('medidor', {
+          ...m,
           deleted: true,
           updated_at: Date.now()
         });
@@ -94,29 +115,52 @@ export default function UserDetailPage() {
       const consumption = current - (latestReading?.current_reading || 0);
       const tariff = await getActiveTariff(user.category);
       
-      if (!tariff) {
-        throw new Error(`No hay una tarifa activa configurada para la categoría ${user.category}.`);
-      }
-
       const esPrimeraLectura = !latestReading || latestReading.current_reading === 0;
       const bill = calculateBill(consumption, tariff, esPrimeraLectura);
 
+      const facturaId = generateId('FAC-');
+      const facturaUuid = uuidv4();
+      const readingUuid = uuidv4();
+      const now = Date.now();
+
       const readingData = {
         user_id: user.id,
+        medidor_id: user.meter_id,
+        factura_id: facturaId,
         previous_reading: latestReading?.current_reading || 0,
         current_reading: current,
         consumption,
-        date: Date.now(),
+        date: now,
         status: 'pending' as const,
         bill_details: bill,
         imagen: capturedImage || undefined,
-        uuid: uuidv4(),
-        updated_at: Date.now(),
+        uuid: readingUuid,
+        updated_at: now,
         version: 1
       };
 
-      await db.readings.add(readingData);
-      await syncService.addToQueue('reading', readingData);
+      const readingId = (await db.readings.add(readingData)) as number;
+
+      const facturaDoc: Invoice = {
+        factura_id: facturaId,
+        total: bill.total,
+        consumo: consumption,
+        estado: 'pendiente',
+        usuario_id: user.id,
+        user_id: user.id,
+        medidor_id: user.meter_id,
+        lectura_id: readingId,
+        fecha: now,
+        date: now,
+        bill_details: bill,
+        uuid: facturaUuid,
+        updated_at: now,
+        version: 1
+      };
+      const createdFacId = (await db.facturas.add(facturaDoc)) as number;
+
+      await syncService.addToQueue('reading', { ...readingData, id: readingId });
+      await syncService.addToQueue('factura', { ...facturaDoc, id: createdFacId });
 
       setSaveSuccess(true);
       setTimeout(() => {
@@ -137,6 +181,14 @@ export default function UserDetailPage() {
     const updated = await db.readings.get(readingId);
     if (updated) {
       await syncService.addToQueue('reading', updated);
+    }
+    const relatedFactura = await db.facturas.where('lectura_id').equals(readingId).first();
+    if (relatedFactura && relatedFactura.id) {
+      await db.facturas.update(relatedFactura.id, { estado: 'pagado', updated_at: Date.now() });
+      const updatedFact = await db.facturas.get(relatedFactura.id);
+      if (updatedFact) {
+        await syncService.addToQueue('factura', updatedFact);
+      }
     }
   };
 
@@ -334,13 +386,15 @@ export default function UserDetailPage() {
                 <div className="flex gap-2">
                   <button 
                     onClick={() => {
-                      console.log("Receipt button clicked for reading ID:", reading.id);
-                      navigate(`/recibo/${reading.id}`);
+                      const targetFacturaId = reading.factura_id || reading.id;
+                      console.log("Imprimir recibo/factura clickeado para ID:", targetFacturaId);
+                      navigate(`/recibo/${targetFacturaId}`);
                     }}
-                    className="p-3 bg-zinc-50 text-zinc-600 rounded-xl hover:bg-zinc-100 transition-all"
-                    title="Ver Recibo"
+                    className="p-3 bg-zinc-50 text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all border border-zinc-200/80 shadow-sm flex items-center gap-1.5 active:scale-95"
+                    title="Imprimir Factura / Ver Recibo"
                   >
-                    <ReceiptIcon className="w-5 h-5" />
+                    <DollarSign className="w-5 h-5 text-emerald-600" />
+                    <ReceiptIcon className="w-4 h-4 text-zinc-400" />
                   </button>
                   {reading.status !== 'paid' && (
                     <button 

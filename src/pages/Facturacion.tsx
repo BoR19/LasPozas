@@ -84,6 +84,16 @@ export default function FacturacionPage() {
       if (updated) {
         await syncService.addToQueue('reading', updated);
       }
+
+      const fact = await db.facturas.where('lectura_id').equals(invoice.id).first();
+      if (fact && fact.id) {
+        await db.facturas.update(fact.id, { estado: 'pagado', updated_at: Date.now() });
+        const updatedFact = await db.facturas.get(fact.id);
+        if (updatedFact) {
+          await syncService.addToQueue('factura', updatedFact);
+        }
+      }
+
       setPayingReading(null);
     } catch (error) {
       console.error('Error al cobrar factura:', error);
@@ -241,7 +251,7 @@ export default function FacturacionPage() {
                         <div className="flex items-center gap-2 justify-end md:justify-start">
                           {/* Descargar / Ver recibo */}
                           <button
-                            onClick={() => navigate(`/recibo/${inv.id}`)}
+                            onClick={() => navigate(`/recibo/${inv.factura_id || inv.id}`)}
                             title="Descargar o imprimir recibo"
                             className="p-2 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 rounded-xl transition-all active:scale-95"
                           >
@@ -250,7 +260,7 @@ export default function FacturacionPage() {
 
                           {/* Detalle del recibo */}
                           <button
-                            onClick={() => navigate(`/recibo/${inv.id}`)}
+                            onClick={() => navigate(`/recibo/${inv.factura_id || inv.id}`)}
                             title="Ver detalles de la factura"
                             className="p-2 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 rounded-xl transition-all active:scale-95"
                           >

@@ -15,9 +15,24 @@ export interface User {
   version: number;
 }
 
+export interface Meter {
+  id: string; // e.g. MET-XXXX
+  meter_id: string;
+  user_id: string;
+  categoria?: UserCategory;
+  lectura_inicial?: number;
+  fecha_instalacion?: number;
+  estado?: string;
+  uuid: string;
+  updated_at: number;
+  version: number;
+}
+
 export interface Reading {
   id?: number;
   user_id: string;
+  medidor_id?: string;
+  factura_id?: string;
   previous_reading: number;
   current_reading: number;
   consumption: number;
@@ -28,9 +43,33 @@ export interface Reading {
     fixed_charge: number;
     sewer_cost: number;
     total: number;
-    tariff_id: number;
+    tariff_id?: number;
   };
   imagen?: Blob;
+  uuid: string;
+  updated_at: number;
+  version: number;
+}
+
+export interface Invoice {
+  id?: number;
+  factura_id: string;
+  total: number;
+  consumo: number;
+  estado: 'pendiente' | 'pagado' | 'anulado';
+  usuario_id: string;
+  user_id: string;
+  medidor_id: string;
+  lectura_id: number | string;
+  fecha: number;
+  date: number;
+  bill_details?: {
+    water_cost: number;
+    fixed_charge: number;
+    sewer_cost: number;
+    total: number;
+    tariff_id?: number;
+  };
   uuid: string;
   updated_at: number;
   version: number;
@@ -42,7 +81,7 @@ export interface Tariff {
   cargo_fijo_mensual: number;
   costo_m3_base: number; // 0-20 m3
   costo_m3_exceso: number; // >20 m3
-  tarifa_conexion: number; // New field
+  tarifa_conexion: number;
   porcentaje_alcantarillado: number;
   fecha_inicio: number;
   fecha_fin: number;
@@ -64,7 +103,7 @@ export interface Staff {
 
 export interface PendingSync {
   id?: number;
-  type: 'reading' | 'user' | 'tarifa' | 'staff';
+  type: 'reading' | 'user' | 'tarifa' | 'staff' | 'medidor' | 'factura';
   data: string; // JSON string
   status: 'pending' | 'synced';
   created_at: number;
@@ -72,7 +111,9 @@ export interface PendingSync {
 
 export class AppDatabase extends Dexie {
   users!: Table<User>;
+  medidores!: Table<Meter>;
   readings!: Table<Reading>;
+  facturas!: Table<Invoice>;
   tariffs!: Table<Tariff>;
   staff!: Table<Staff>;
   pending_sync!: Table<PendingSync>;
@@ -85,8 +126,50 @@ export class AppDatabase extends Dexie {
       tariffs: '++id, categoria, fecha_inicio, fecha_fin, uuid',
       staff: '++id, username, role, uuid',
       pending_sync: '++id, type, status, created_at'
-    }).upgrade(tx => {
-      // Data migration
+    });
+
+    this.version(6).stores({
+      users: 'id, name, meter_id, category, uuid',
+      medidores: 'id, meter_id, user_id, uuid',
+      readings: '++id, user_id, medidor_id, date, status, uuid, factura_id',
+      facturas: '++id, factura_id, usuario_id, user_id, medidor_id, lectura_id, fecha, estado, uuid',
+      tariffs: '++id, categoria, fecha_inicio, fecha_fin, uuid',
+      staff: '++id, username, role, uuid',
+      pending_sync: '++id, type, status, created_at'
+    }).upgrade(async (tx) => {
+      // Migrar lecturas existentes a facturas
+      try {
+        const readings = await tx.table('readings').toArray();
+        for (const r of readings) {
+          if (!r.factura_id) {
+            const facId = `FAC-${r.id || Date.now()}`;
+            await tx.table('readings').update(r.id, { factura_id: facId });
+            await tx.table('facturas').add({
+              factura_id: facId,
+              total: r.bill_details?.total ?? 0,
+              consumo: r.consumption ?? 0,
+              estado: r.status === 'paid' ? 'pagado' : 'pendiente',
+              usuario_id: r.user_id,
+              user_id: r.user_id,
+              medidor_id: r.medidor_id || 'MET-S/N',
+              lectura_id: r.id,
+              fecha: r.date || Date.now(),
+              date: r.date || Date.now(),
+              bill_details: r.bill_details || {
+                water_cost: 0,
+                fixed_charge: 0,
+                sewer_cost: 0,
+                total: 0
+              },
+              uuid: r.uuid || uuidv4(),
+              updated_at: Date.now(),
+              version: 1
+            });
+          }
+        }
+      } catch (err) {
+        console.warn('Upgrade error in version 6:', err);
+      }
     });
   }
 }
@@ -198,16 +281,52 @@ export async function seedDatabase() {
   for (const s of allStaff) {
     if (!s.password) continue;
     try {
-      // Test if decode succeeds
       const decoded = decodePassword(s.password);
       if (decoded === s.password && s.password.length > 0) {
-        // Plaintext detected, encode it
         await db.staff.update(s.id!, { password: encodePassword(s.password) });
       }
-    } catch (e) {
-      // If error occurred, encode as fallback
+    } catch {
       await db.staff.update(s.id!, { password: encodePassword(s.password) });
     }
+  }
+
+  // Asegurar que cada lectura previa tenga su factura asociada en db.facturas
+  try {
+    const readings = await db.readings.toArray();
+    for (const r of readings) {
+      if (r.id) {
+        const existingFac = await db.facturas.where('lectura_id').equals(r.id).first();
+        if (!existingFac) {
+          const facId = r.factura_id || `FAC-${r.id}`;
+          if (!r.factura_id) {
+            await db.readings.update(r.id, { factura_id: facId });
+          }
+          await db.facturas.add({
+            factura_id: facId,
+            total: r.bill_details?.total ?? 0,
+            consumo: r.consumption ?? 0,
+            estado: r.status === 'paid' ? 'pagado' : 'pendiente',
+            usuario_id: r.user_id,
+            user_id: r.user_id,
+            medidor_id: r.medidor_id || 'MET-S/N',
+            lectura_id: r.id,
+            fecha: r.date || Date.now(),
+            date: r.date || Date.now(),
+            bill_details: r.bill_details || {
+              water_cost: 0,
+              fixed_charge: 0,
+              sewer_cost: 0,
+              total: 0
+            },
+            uuid: r.uuid || uuidv4(),
+            updated_at: Date.now(),
+            version: 1
+          });
+        }
+      }
+    }
+  } catch (migrErr) {
+    console.warn('Error sincronizando facturas existentes:', migrErr);
   }
 }
 

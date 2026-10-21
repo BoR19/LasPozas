@@ -13,7 +13,7 @@ import ReceiptFooter from './ReceiptFooter';
 interface ReceiptProps {
   reading: Reading;
   user: User;
-  tariff: Tariff;
+  tariff?: Tariff | null;
 }
 
 export default function Receipt({ reading, user, tariff }: ReceiptProps) {
@@ -23,7 +23,7 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
 
   console.log("Receipt component rendered with:", { reading, user, tariff });
 
-  if (!reading || !user || !tariff) {
+  if (!reading || !user) {
     return (
       <div className="bg-white p-8 rounded-3xl shadow-xl border border-zinc-100 max-w-md mx-auto text-center space-y-4">
         <h2 className="text-xl font-black text-red-600">Error al cargar el recibo</h2>
@@ -38,6 +38,21 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
     );
   }
 
+  const safeTariff: Tariff = tariff || {
+    id: 0,
+    categoria: user.category || 'Residencial',
+    cargo_fijo_mensual: 0,
+    costo_m3_base: 0,
+    costo_m3_exceso: 0,
+    tarifa_conexion: 0,
+    porcentaje_alcantarillado: 0,
+    fecha_inicio: 0,
+    fecha_fin: Date.now() + 315360000000,
+    uuid: 'tarifa-default-cero',
+    updated_at: Date.now(),
+    version: 1
+  };
+
   const handlePrint = () => {
     const printArea = document.getElementById('print-area');
     if (!printArea) {
@@ -45,25 +60,22 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
       return;
     }
 
-    // Abrir ventana nueva
     const printWindow = window.open('', '_blank', 'width=800,height=600');
     if (!printWindow) {
       alert('Por favor, habilita las ventanas emergentes para poder imprimir.');
       return;
     }
 
-    // Obtener todos los estilos del documento actual
     const styles = Array.from(document.styleSheets)
       .map(sheet => {
         try {
           return Array.from(sheet.cssRules).map(rule => rule.cssText).join('\n');
-        } catch (e) {
-          return ''; // Ignorar hojas de estilo externas bloqueadas por CORS
+        } catch {
+          return '';
         }
       })
       .join('\n');
 
-    // Construir el documento de impresión
     printWindow.document.write(`
       <html>
         <head>
@@ -84,7 +96,6 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
     
     printWindow.document.close();
     
-    // Esperar un momento a que carguen los estilos y disparar impresión
     setTimeout(() => {
       printWindow.focus();
       printWindow.print();
@@ -162,12 +173,12 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
       >
         <ReceiptHeader reading={reading} user={user} />
         <ReceiptInfo user={user} reading={reading} />
-        <ReceiptTotals reading={reading} tariff={tariff} />
+        <ReceiptTotals reading={reading} tariff={safeTariff} />
         <ReceiptFooter />
         
-        {reading.previous_reading === 0 && (
+        {(reading.previous_reading ?? 0) === 0 && (
           <div className="text-center mt-4 text-xs font-bold text-blue-600 uppercase tracking-widest">
-            Pago por conexión al servicio
+            Lectura Inicial / Conexión
           </div>
         )}
         

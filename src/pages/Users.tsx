@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type UserCategory } from '../database/db';
 import { syncService } from '../services/syncService';
+import { registrarUsuario } from '../services/billingService';
 import { generateId } from '../lib/utils';
 import ConfirmModal from '../components/ConfirmModal';
 import { v4 as uuidv4 } from 'uuid';
@@ -27,19 +28,40 @@ export default function UsersPage() {
       const userToDelete = await db.users.get(deleteTarget);
       if (userToDelete) {
         const relatedReadings = await db.readings.where('user_id').equals(deleteTarget).toArray();
+        const relatedFacturas = await db.facturas.where('usuario_id').equals(deleteTarget).toArray();
+        const relatedMedidores = await db.medidores.where('user_id').equals(deleteTarget).toArray();
+
         await db.readings.where('user_id').equals(deleteTarget).delete();
+        await db.facturas.where('usuario_id').equals(deleteTarget).delete();
+        await db.medidores.where('user_id').equals(deleteTarget).delete();
         await db.users.delete(deleteTarget);
         
         // Registrar eliminación para sincronizar
         await syncService.addToQueue('user', {
           ...userToDelete,
-          deleted: true, // Marcador para sincronizar la eliminación
+          deleted: true,
           updated_at: Date.now()
         });
 
         for (const r of relatedReadings) {
           await syncService.addToQueue('reading', {
             ...r,
+            deleted: true,
+            updated_at: Date.now()
+          });
+        }
+
+        for (const f of relatedFacturas) {
+          await syncService.addToQueue('factura', {
+            ...f,
+            deleted: true,
+            updated_at: Date.now()
+          });
+        }
+
+        for (const m of relatedMedidores) {
+          await syncService.addToQueue('medidor', {
+            ...m,
             deleted: true,
             updated_at: Date.now()
           });
@@ -75,48 +97,24 @@ export default function UsersPage() {
 
   const handleAddUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    const userId = generateId('USR-');
-    const meterId = generateId('MET-');
-    
-    await db.users.add({
-      id: userId,
-      name: newUser.name,
-      address: newUser.address,
-      meter_id: meterId,
-      category: newUser.category,
-      createdAt: Date.now(),
-      uuid: uuidv4(),
-      updated_at: Date.now(),
-      version: 1
-    });
+    if (!newUser.name.trim()) return;
 
-    // Initial reading entry
-    await db.readings.add({
-      user_id: userId,
-      previous_reading: 0,
-      current_reading: newUser.initialReading,
-      consumption: 0,
-      date: Date.now(),
-      status: 'paid',
-      uuid: uuidv4(),
-      updated_at: Date.now(),
-      version: 1
-    });
+    try {
+      const result = await registrarUsuario({
+        name: newUser.name,
+        address: newUser.address,
+        category: newUser.category,
+        initialReading: newUser.initialReading
+      });
 
-    await syncService.addToQueue('user', {
-      id: userId,
-      name: newUser.name,
-      address: newUser.address,
-      meter_id: meterId,
-      category: newUser.category,
-      createdAt: Date.now(),
-      uuid: uuidv4(),
-      updated_at: Date.now(),
-      version: 1
-    });
-
-    setIsAdding(false);
-    setNewUser({ name: '', address: '', initialReading: 0, category: 'Residencial' });
+      setIsAdding(false);
+      setNewUser({ name: '', address: '', initialReading: 0, category: 'Residencial' });
+      // Redirige al detalle y el botón de imprimir ya tendrá un facturaId válido
+      navigate(`/users/${result.userId}`);
+    } catch (err) {
+      console.error('Error al registrar usuario:', err);
+      alert('Error al registrar usuario');
+    }
   };
 
   const handleEditUser = async (e: React.FormEvent) => {

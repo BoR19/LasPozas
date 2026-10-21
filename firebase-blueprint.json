@@ -17,12 +17,32 @@
       },
       "required": ["id", "name", "address", "meter_id", "category", "uuid"]
     },
+    "Medidor": {
+      "title": "Medidor",
+      "description": "Registered water meter device.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Meter code (e.g. MET-XXXX)" },
+        "meter_id": { "type": "string", "description": "Meter code" },
+        "user_id": { "type": "string", "description": "Referenced customer ID" },
+        "categoria": { "type": "string", "description": "Category" },
+        "lectura_inicial": { "type": "number", "description": "Initial reading in m3" },
+        "fecha_instalacion": { "type": "number", "description": "Installation timestamp" },
+        "estado": { "type": "string", "description": "Meter operational state" },
+        "uuid": { "type": "string", "description": "Global unique identifier" },
+        "updated_at": { "type": "number", "description": "Last update timestamp" },
+        "version": { "type": "number", "description": "Record version" }
+      },
+      "required": ["id", "meter_id", "user_id", "uuid"]
+    },
     "Reading": {
       "title": "Reading",
       "description": "Monthly water meter reading and consumption record.",
       "type": "object",
       "properties": {
         "user_id": { "type": "string", "description": "Referenced customer ID" },
+        "medidor_id": { "type": "string", "description": "Referenced meter ID" },
+        "factura_id": { "type": "string", "description": "Referenced invoice ID" },
         "previous_reading": { "type": "number", "description": "Previous meter reading in m3" },
         "current_reading": { "type": "number", "description": "Current meter reading in m3" },
         "consumption": { "type": "number", "description": "Calculated consumption in m3" },
@@ -33,6 +53,25 @@
         "version": { "type": "number", "description": "Record version" }
       },
       "required": ["user_id", "previous_reading", "current_reading", "consumption", "date", "status", "uuid"]
+    },
+    "Factura": {
+      "title": "Factura",
+      "description": "Water bill or invoice record.",
+      "type": "object",
+      "properties": {
+        "factura_id": { "type": "string", "description": "Invoice identifier (e.g. FAC-XXXX)" },
+        "total": { "type": "number", "description": "Total amount to pay in Bs" },
+        "consumo": { "type": "number", "description": "Water consumption in m3" },
+        "estado": { "type": "string", "enum": ["pendiente", "pagado", "anulado"], "description": "Invoice payment state" },
+        "usuario_id": { "type": "string", "description": "Customer ID" },
+        "medidor_id": { "type": "string", "description": "Meter ID" },
+        "lectura_id": { "description": "Referenced reading ID" },
+        "fecha": { "type": "number", "description": "Invoice issue date timestamp" },
+        "uuid": { "type": "string", "description": "Global unique identifier" },
+        "updated_at": { "type": "number", "description": "Last update timestamp" },
+        "version": { "type": "number", "description": "Record version" }
+      },
+      "required": ["factura_id", "total", "consumo", "estado", "usuario_id", "medidor_id", "fecha", "uuid"]
     },
     "Tariff": {
       "title": "Tariff",
@@ -74,9 +113,17 @@
       "schema": { "$ref": "#/entities/User" },
       "description": "Subscribers collection"
     },
+    "/medidores/{medidorId}": {
+      "schema": { "$ref": "#/entities/Medidor" },
+      "description": "Water meters collection"
+    },
     "/readings/{readingId}": {
       "schema": { "$ref": "#/entities/Reading" },
       "description": "Meter reading records"
+    },
+    "/facturas/{facturaId}": {
+      "schema": { "$ref": "#/entities/Factura" },
+      "description": "Invoices collection"
     },
     "/tarifas/{tarifaId}": {
       "schema": { "$ref": "#/entities/Tariff" },

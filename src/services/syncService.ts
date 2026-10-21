@@ -1,3 +1,4 @@
+import Dexie from 'dexie';
 import { db as localDb } from '../database/db';
 import { db as firestoreDb } from '../lib/firebase';
 import { 
@@ -8,7 +9,7 @@ import {
   getDocs, 
   query, 
   where, 
-  onSnapshot,
+  onSnapshot, 
   addDoc 
 } from 'firebase/firestore';
 
@@ -25,87 +26,119 @@ const getTable = (name: string) => {
   if (name === 'tarifa' || name === 'tarifas') return localDb.tariffs;
   if (name === 'user' || name === 'users') return localDb.users;
   if (name === 'reading' || name === 'readings') return localDb.readings;
+  if (name === 'medidor' || name === 'medidores' || name === 'meters') return localDb.medidores;
+  if (name === 'factura' || name === 'facturas' || name === 'invoices') return localDb.facturas;
   if (name === 'staff' || name === 'staffs') return localDb.staff;
   return (localDb as any)[name];
 };
 
+let syncTimeout: any = null;
+let isSyncing = false;
+
 export const syncService = {
-  async addToQueue(type: 'reading' | 'user' | 'tarifa' | 'staff', data: any) {
+  async addToQueue(type: 'reading' | 'user' | 'tarifa' | 'staff' | 'medidor' | 'factura', data: any) {
     const processedData = { ...data };
     if (processedData.imagen instanceof Blob) {
       processedData.imagen = await blobToBase64(processedData.imagen);
     }
 
-    await localDb.pending_sync.add({
-      type,
-      data: JSON.stringify(processedData),
-      status: 'pending',
-      created_at: Date.now()
+    await Dexie.ignoreTransaction(async () => {
+      await localDb.pending_sync.add({
+        type,
+        data: JSON.stringify(processedData),
+        status: 'pending',
+        created_at: Date.now()
+      });
     });
-    this.triggerSync();
+
+    if (syncTimeout) {
+      clearTimeout(syncTimeout);
+    }
+    syncTimeout = setTimeout(() => {
+      syncService.triggerSync().catch(err => console.error('Error en triggerSync:', err));
+    }, 100);
   },
 
   async triggerSync() {
     if (!navigator.onLine) return;
-    
-    // Push local changes
-    const pending = await localDb.pending_sync.where('status').equals('pending').toArray();
-    for (const item of pending) {
-      try {
-        const data = JSON.parse(item.data);
-        const colName = item.type === 'tarifa' ? 'tarifas' : item.type === 'staff' ? 'staff' : `${item.type}s`;
-        const itemUuid = data.uuid;
+    if (isSyncing) return;
+    isSyncing = true;
 
-        if (itemUuid) {
-          const docRef = doc(firestoreDb, colName, itemUuid);
-          if (data.deleted) {
-            await setDoc(docRef, {
-              ...data,
-              deleted: true,
-              updated_at: data.updated_at || Date.now()
-            }, { merge: true });
+    try {
+      let pending: any[] = [];
+      await Dexie.ignoreTransaction(async () => {
+        pending = await localDb.pending_sync.where('status').equals('pending').toArray();
+      });
 
-            // Limpiar posibles documentos duplicados legados
-            try {
-              const q = query(collection(firestoreDb, colName), where('uuid', '==', itemUuid));
-              const snap = await getDocs(q);
-              for (const d of snap.docs) {
-                if (d.id !== itemUuid) {
-                  await deleteDoc(d.ref);
+      for (const item of pending) {
+        try {
+          const data = JSON.parse(item.data);
+          const colName = 
+            item.type === 'tarifa' ? 'tarifas' : 
+            item.type === 'staff' ? 'staff' : 
+            item.type === 'medidor' ? 'medidores' :
+            item.type === 'factura' ? 'facturas' :
+            `${item.type}s`;
+
+          const itemUuid = data.uuid || data.id;
+
+          if (itemUuid) {
+            const docRef = doc(firestoreDb, colName, String(itemUuid));
+            if (data.deleted) {
+              await setDoc(docRef, {
+                ...data,
+                deleted: true,
+                updated_at: data.updated_at || Date.now()
+              }, { merge: true });
+
+              // Limpiar posibles duplicados legados
+              try {
+                const q = query(collection(firestoreDb, colName), where('uuid', '==', itemUuid));
+                const snap = await getDocs(q);
+                for (const d of snap.docs) {
+                  if (d.id !== itemUuid) {
+                    await deleteDoc(d.ref);
+                  }
                 }
+              } catch (cleanErr) {
+                console.warn('Error limpiando duplicados legados:', cleanErr);
               }
-            } catch (cleanErr) {
-              console.warn('Error limpiando duplicados legados:', cleanErr);
+            } else {
+              await setDoc(docRef, data, { merge: true });
+
+              // Limpiar duplicados legados
+              try {
+                const q = query(collection(firestoreDb, colName), where('uuid', '==', itemUuid));
+                const snap = await getDocs(q);
+                for (const d of snap.docs) {
+                  if (d.id !== itemUuid) {
+                    await deleteDoc(d.ref);
+                  }
+                }
+              } catch (cleanErr) {
+                console.warn('Error limpiando duplicados legados:', cleanErr);
+              }
             }
           } else {
-            await setDoc(docRef, data, { merge: true });
-
-            // Limpiar duplicados legados
-            try {
-              const q = query(collection(firestoreDb, colName), where('uuid', '==', itemUuid));
-              const snap = await getDocs(q);
-              for (const d of snap.docs) {
-                if (d.id !== itemUuid) {
-                  await deleteDoc(d.ref);
-                }
-              }
-            } catch (cleanErr) {
-              console.warn('Error limpiando duplicados legados:', cleanErr);
-            }
+            await addDoc(collection(firestoreDb, colName), data);
           }
-        } else {
-          await addDoc(collection(firestoreDb, colName), data);
-        }
 
-        await localDb.pending_sync.update(item.id!, { status: 'synced' });
-      } catch (error) {
-        console.error(`Error syncing ${item.type}:`, error);
+          if (item.id) {
+            await Dexie.ignoreTransaction(async () => {
+              await localDb.pending_sync.update(item.id, { status: 'synced' });
+            });
+          }
+        } catch (error) {
+          console.error(`Error syncing ${item.type}:`, error);
+        }
       }
+    } finally {
+      isSyncing = false;
     }
   },
 
   initRealtimeSync() {
-    const collections = ['users', 'readings', 'tarifas', 'staff'];
+    const collections = ['users', 'readings', 'tarifas', 'staff', 'medidores', 'facturas'];
     
     collections.forEach(colName => {
       onSnapshot(collection(firestoreDb, colName), async (snapshot) => {
@@ -160,6 +193,8 @@ export const syncService = {
                   objToPut.id = existing.id;
                 } else if (colName === 'users') {
                   objToPut.id = data.id || data.uuid;
+                } else if (colName === 'medidores') {
+                  objToPut.id = data.id || data.meter_id || data.uuid;
                 } else {
                   delete objToPut.id;
                 }

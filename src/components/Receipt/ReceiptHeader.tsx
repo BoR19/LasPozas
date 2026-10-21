@@ -9,6 +9,8 @@ interface ReceiptHeaderProps {
 }
 
 export default function ReceiptHeader({ reading, user }: ReceiptHeaderProps) {
+  const invoiceNumber = reading.factura_id || (reading.uuid ? reading.uuid.slice(0, 8).toUpperCase() : 'FAC-0001');
+
   return (
     <div className="flex flex-col items-center text-center mb-8">
       <div className="p-3 bg-blue-600 rounded-2xl text-white mb-3 print:bg-black">
@@ -20,11 +22,11 @@ export default function ReceiptHeader({ reading, user }: ReceiptHeaderProps) {
       <div className="w-full flex justify-between items-center mt-6 border-t border-zinc-100 pt-4">
         <div className="text-left">
           <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Fecha</p>
-          <p className="text-sm font-bold text-zinc-900">{formatDate(reading.date)}</p>
+          <p className="text-sm font-bold text-zinc-900">{formatDate(reading.date || Date.now())}</p>
         </div>
         <div className="text-right">
           <p className="text-[10px] text-zinc-400 font-bold uppercase tracking-widest">Nº Factura</p>
-          <p className="text-sm font-bold text-zinc-900">{reading.uuid.slice(0, 8).toUpperCase()}</p>
+          <p className="text-sm font-bold text-zinc-900">{invoiceNumber}</p>
         </div>
       </div>
     </div>
