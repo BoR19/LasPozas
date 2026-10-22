@@ -13,6 +13,28 @@ import {
   addDoc 
 } from 'firebase/firestore';
 
+export function sanitizeFirestoreData(obj: any): any {
+  if (obj === null || obj === undefined) return null;
+  if (typeof obj !== 'object') return obj;
+  if (obj instanceof Date) return obj.getTime();
+  if (obj instanceof Blob) return null;
+  
+  if (Array.isArray(obj)) {
+    return obj
+      .filter(item => item !== undefined)
+      .map(item => sanitizeFirestoreData(item));
+  }
+  
+  const clean: Record<string, any> = {};
+  for (const key of Object.keys(obj)) {
+    const val = obj[key];
+    if (val !== undefined) {
+      clean[key] = sanitizeFirestoreData(val);
+    }
+  }
+  return clean;
+}
+
 const blobToBase64 = (blob: Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -57,7 +79,7 @@ export const syncService = {
     }
     syncTimeout = setTimeout(() => {
       syncService.triggerSync().catch(err => console.error('Error en triggerSync:', err));
-    }, 100);
+    }, 50);
   },
 
   async triggerSync() {
@@ -73,7 +95,8 @@ export const syncService = {
 
       for (const item of pending) {
         try {
-          const data = JSON.parse(item.data);
+          const rawData = JSON.parse(item.data);
+          const data = sanitizeFirestoreData(rawData);
           const colName = 
             item.type === 'tarifa' ? 'tarifas' : 
             item.type === 'staff' ? 'staff' : 
@@ -82,7 +105,7 @@ export const syncService = {
             item.type === 'configuracion' ? 'configuracion' :
             `${item.type}s`;
 
-          const itemUuid = data.uuid || data.id;
+          const itemUuid = data.uuid || data.id || data.factura_id;
 
           if (itemUuid) {
             const docRef = doc(firestoreDb, colName, String(itemUuid));
@@ -92,34 +115,8 @@ export const syncService = {
                 deleted: true,
                 updated_at: data.updated_at || Date.now()
               }, { merge: true });
-
-              // Limpiar posibles duplicados legados
-              try {
-                const q = query(collection(firestoreDb, colName), where('uuid', '==', itemUuid));
-                const snap = await getDocs(q);
-                for (const d of snap.docs) {
-                  if (d.id !== itemUuid) {
-                    await deleteDoc(d.ref);
-                  }
-                }
-              } catch (cleanErr) {
-                console.warn('Error limpiando duplicados legados:', cleanErr);
-              }
             } else {
               await setDoc(docRef, data, { merge: true });
-
-              // Limpiar duplicados legados
-              try {
-                const q = query(collection(firestoreDb, colName), where('uuid', '==', itemUuid));
-                const snap = await getDocs(q);
-                for (const d of snap.docs) {
-                  if (d.id !== itemUuid) {
-                    await deleteDoc(d.ref);
-                  }
-                }
-              } catch (cleanErr) {
-                console.warn('Error limpiando duplicados legados:', cleanErr);
-              }
             }
           } else {
             await addDoc(collection(firestoreDb, colName), data);
@@ -179,30 +176,71 @@ export const syncService = {
         // Aplicar el estado más reciente y certero para cada UUID
         for (const [uuid, { data }] of latestByUuid.entries()) {
           try {
+            // Localizar registro local existente en Dexie
+            let existing = await table.where('uuid').equals(uuid).first();
+            if (!existing && data.factura_id) {
+              existing = await table.where('factura_id').equals(data.factura_id).first();
+            }
+            if (!existing && data.id) {
+              existing = await table.get(data.id);
+            }
+
             if (data.deleted) {
-              const existing = await table.where('uuid').equals(uuid).first();
               if (existing) {
                 await table.delete(existing.id);
               }
-            } else {
-              const existing = await table.where('uuid').equals(uuid).first();
-              const remoteTime = data.updated_at || 0;
-              const localTime = existing?.updated_at || 0;
+              continue;
+            }
 
-              if (!existing || remoteTime >= localTime) {
-                const objToPut = { ...data };
-                if (existing) {
-                  objToPut.id = existing.id;
-                } else if (colName === 'users') {
-                  objToPut.id = data.id || data.uuid;
-                } else if (colName === 'medidores') {
-                  objToPut.id = data.id || data.meter_id || data.uuid;
-                } else {
-                  delete objToPut.id;
-                }
-                delete objToPut.deleted;
-                await table.put(objToPut);
+            // REGLA DE PROTECCIÓN DE PAGO PARA PRODUCCIÓN:
+            // Si localmente ya se confirmó el pago (status == 'paid' o estado == 'pagado'),
+            // y desde Firestore llega un snapshot viejo todavía como pendiente,
+            // ¡NO degradar a pendiente! Preservar el pago y actualizar Firestore.
+            const isLocalPaid = 
+              existing && (
+                existing.status === 'paid' || 
+                existing.estado_pago === 'pagado' || 
+                existing.estado === 'pagado'
+              );
+
+            const isRemotePending = 
+              data.status === 'pending' || 
+              data.estado_pago === 'pendiente' || 
+              data.estado === 'pendiente';
+
+            if (isLocalPaid && isRemotePending) {
+              console.log(`[syncService] 🛡️ Protegiendo estado PAGADO local en ${colName} (${uuid}) contra snapshot remoto.`);
+              // Forzar actualización inmediata en Firestore para que la nube también quede en 'pagado'
+              const docRef = doc(firestoreDb, colName, String(uuid));
+              setDoc(docRef, {
+                status: 'paid',
+                estado: 'pagado',
+                estado_pago: 'pagado',
+                metodo_pago: existing.metodo_pago || 'efectivo',
+                fecha_pago: existing.fecha_pago || Date.now(),
+                updated_at: existing.updated_at || Date.now()
+              }, { merge: true }).catch(() => {});
+              continue;
+            }
+
+            const remoteTime = data.updated_at || 0;
+            const localTime = existing?.updated_at || 0;
+
+            if (!existing || remoteTime >= localTime) {
+              const objToPut = { ...data };
+              objToPut.uuid = objToPut.uuid || uuid;
+
+              if (existing) {
+                objToPut.id = existing.id;
+              } else if (colName === 'users') {
+                objToPut.id = data.id || data.uuid;
+              } else if (colName === 'medidores') {
+                objToPut.id = data.id || data.meter_id || data.uuid;
+              } else {
+                delete objToPut.id;
               }
+              delete objToPut.deleted;
+              await table.put(objToPut);
             }
           } catch (itemErr) {
             console.error(`Error procesando sync en ${colName}:`, itemErr);

@@ -287,11 +287,11 @@ export default function UserDetailPage() {
     cambio?: number;
   }) => {
     if (!payingReading) return;
-    const targetFacturaId = payingReading.factura_id || payingReading.id;
-    if (!targetFacturaId) return;
 
     await registrarPagoFactura({
-      facturaId: targetFacturaId,
+      facturaId: payingReading.factura_id || payingReading.id,
+      readingId: payingReading.id,
+      readingUuid: payingReading.uuid,
       metodo_pago: details.metodo_pago,
       monto_recibido: details.monto_recibido,
       cambio: details.cambio

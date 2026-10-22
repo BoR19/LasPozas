@@ -1,7 +1,9 @@
 import { db, type User, type Reading, type Tariff, type UserCategory, type Invoice, type Meter, type InvoiceDetalle } from '../database/db';
 import { v4 as uuidv4 } from 'uuid';
 import { generateId } from '../lib/utils';
-import { syncService } from './syncService';
+import { db as firestoreDb } from '../lib/firebase';
+import { doc, setDoc } from 'firebase/firestore';
+import { syncService, sanitizeFirestoreData } from './syncService';
 
 /**
  * Estructura tarifaria vigente (31 dic 2023 al 30 dic 2030)
@@ -589,75 +591,232 @@ export async function registrarUsuario(data: {
 
 /**
  * Registra el cobro de una factura (en efectivo o vía QR estático FIE/Altoke).
- * Actualiza de forma sincronizada facturas y readings, marcando estado_pago = 'pagado'.
+ * Actualiza de forma sincronizada y atómica facturas y readings, tanto en Dexie local
+ * como directamente en Firestore para producción (Vercel).
  */
 export async function registrarPagoFactura(params: {
-  facturaId: string | number;
+  facturaId?: string | number;
+  readingId?: string | number;
+  readingUuid?: string;
   metodo_pago: 'efectivo' | 'qr_fie' | 'qr_altoke';
   monto_recibido?: number;
   cambio?: number;
 }) {
   const now = Date.now();
-  let factura: Invoice | undefined;
+  console.log('[registrarPagoFactura] Procesando cobro:', params);
 
-  const idStr = String(params.facturaId).trim();
-  const idNum = parseInt(idStr, 10);
-
-  if (!isNaN(idNum)) {
-    factura = await db.facturas.get(idNum);
-  }
-  if (!factura) {
-    factura = await db.facturas.where('factura_id').equals(idStr).first();
-  }
-  if (!factura) {
-    factura = await db.facturas.where('uuid').equals(idStr).first();
-  }
-  if (!factura && !isNaN(idNum)) {
-    const r = await db.readings.get(idNum);
-    if (r?.factura_id) {
-      factura = await db.facturas.where('factura_id').equals(r.factura_id).first();
+  // 1. Buscar la lectura correspondiente
+  let reading: Reading | undefined;
+  
+  // A. Buscar por readingId si se provee
+  if (params.readingId !== undefined && params.readingId !== null) {
+    const rIdNum = typeof params.readingId === 'number' ? params.readingId : parseInt(String(params.readingId), 10);
+    if (!isNaN(rIdNum)) {
+      reading = await db.readings.get(rIdNum);
+    }
+    if (!reading) {
+      reading = await db.readings.where('uuid').equals(String(params.readingId)).first();
+    }
+    if (!reading) {
+      reading = await db.readings.where('factura_id').equals(String(params.readingId)).first();
     }
   }
 
-  if (!factura) {
-    throw new Error(`No se encontró la factura con identificador "${params.facturaId}"`);
+  // B. Buscar por readingUuid
+  if (!reading && params.readingUuid) {
+    reading = await db.readings.where('uuid').equals(params.readingUuid).first();
   }
 
+  // C. Buscar por facturaId
+  if (!reading && params.facturaId !== undefined && params.facturaId !== null) {
+    const facIdStr = String(params.facturaId).trim();
+    const facIdNum = parseInt(facIdStr, 10);
+
+    reading = await db.readings.where('factura_id').equals(facIdStr).first();
+    if (!reading) {
+      reading = await db.readings.where('uuid').equals(facIdStr).first();
+    }
+    if (!reading && !isNaN(facIdNum)) {
+      reading = await db.readings.get(facIdNum);
+    }
+  }
+
+  // 2. Buscar la factura correspondiente
+  let factura: Invoice | undefined;
+  const idStr = params.facturaId !== undefined ? String(params.facturaId).trim() : '';
+  const idNum = parseInt(idStr, 10);
+
+  if (idStr) {
+    factura = await db.facturas.where('factura_id').equals(idStr).first();
+    if (!factura) {
+      factura = await db.facturas.where('uuid').equals(idStr).first();
+    }
+    if (!factura && !isNaN(idNum)) {
+      factura = await db.facturas.get(idNum);
+    }
+  }
+
+  // Si encontramos reading pero no factura, intentar localizar factura por el reading
+  if (!factura && reading) {
+    if (reading.factura_id) {
+      factura = await db.facturas.where('factura_id').equals(reading.factura_id).first();
+    }
+    if (!factura && reading.id) {
+      factura = await db.facturas.where('lectura_id').equals(reading.id).first();
+    }
+    if (!factura && reading.uuid) {
+      factura = await db.facturas.where('uuid').equals(reading.uuid).first();
+    }
+  }
+
+  // Si encontramos factura pero no reading, localizar reading por factura
+  if (!reading && factura) {
+    if (typeof factura.lectura_id === 'number') {
+      reading = await db.readings.get(factura.lectura_id);
+    }
+    if (!reading && factura.factura_id) {
+      reading = await db.readings.where('factura_id').equals(factura.factura_id).first();
+    }
+    if (!reading && factura.uuid) {
+      reading = await db.readings.where('uuid').equals(factura.uuid).first();
+    }
+  }
+
+  // Si no se encontró ninguno, error explicativo
+  if (!reading && !factura) {
+    throw new Error(`No se encontró registro para cobrar (Identificador: ${params.facturaId || params.readingId})`);
+  }
+
+  const montoTotal = Number(
+    factura?.total ?? 
+    reading?.bill_details?.total ?? 
+    reading?.detalle?.total ?? 
+    0
+  );
+
+  const montoRecibido = params.monto_recibido ?? montoTotal;
+  const cambioDevolver = params.cambio ?? Math.max(0, Math.round((montoRecibido - montoTotal) * 100) / 100);
+
+  // Sintetizar factura si faltaba en Dexie
+  if (!factura && reading) {
+    const newFacId = reading.factura_id || `FAC-${reading.id || Date.now()}`;
+    const newFacUuid = reading.uuid || uuidv4();
+    factura = {
+      factura_id: newFacId,
+      total: montoTotal,
+      consumo: reading.consumption ?? 0,
+      estado: 'pagado',
+      estado_pago: 'pagado',
+      metodo_pago: params.metodo_pago,
+      fecha_pago: now,
+      monto_recibido: montoRecibido,
+      cambio: cambioDevolver,
+      usuario_id: reading.user_id,
+      user_id: reading.user_id,
+      medidor_id: reading.medidor_id || 'MET-S/N',
+      lectura_id: reading.id ?? reading.uuid,
+      fecha: reading.date || now,
+      date: reading.date || now,
+      detalle: reading.detalle,
+      desglose: reading.desglose,
+      bill_details: reading.bill_details,
+      uuid: newFacUuid,
+      updated_at: now,
+      version: 1
+    };
+    const createdId = await db.facturas.add(factura);
+    factura.id = createdId as number;
+  }
+
+  // Sintetizar reading si faltaba en Dexie
+  if (!reading && factura) {
+    const newReadingUuid = factura.uuid || uuidv4();
+    reading = {
+      user_id: factura.user_id || factura.usuario_id,
+      medidor_id: factura.medidor_id,
+      factura_id: factura.factura_id,
+      previous_reading: factura.lectura_anterior || 0,
+      current_reading: factura.lectura_actual || (factura.consumo || 0),
+      consumption: factura.consumo || 0,
+      date: factura.fecha || factura.date || now,
+      status: 'paid',
+      estado_pago: 'pagado',
+      metodo_pago: params.metodo_pago,
+      fecha_pago: now,
+      monto_recibido: montoRecibido,
+      cambio: cambioDevolver,
+      detalle: factura.detalle,
+      bill_details: factura.bill_details || {
+        water_cost: 0,
+        fixed_charge: 0,
+        sewer_cost: 0,
+        total: factura.total
+      },
+      uuid: newReadingUuid,
+      updated_at: now,
+      version: 1
+    };
+    const createdRId = await db.readings.add(reading);
+    reading.id = createdRId as number;
+  }
+
+  // Actualizar lectura en Dexie
+  const updatedReading: Reading = {
+    ...reading!,
+    status: 'paid',
+    estado_pago: 'pagado',
+    metodo_pago: params.metodo_pago,
+    fecha_pago: now,
+    monto_recibido: montoRecibido,
+    cambio: cambioDevolver,
+    updated_at: now,
+    version: ((reading as any).version || 1) + 1
+  };
+  if (reading!.id) {
+    await db.readings.update(reading!.id, updatedReading);
+  }
+
+  // Actualizar factura en Dexie
   const updatedFactura: Invoice = {
-    ...factura,
+    ...factura!,
     estado: 'pagado',
     estado_pago: 'pagado',
     metodo_pago: params.metodo_pago,
     fecha_pago: now,
-    monto_recibido: params.monto_recibido ?? factura.total,
-    cambio: params.cambio ?? 0,
+    monto_recibido: montoRecibido,
+    cambio: cambioDevolver,
     updated_at: now,
-    version: (factura.version || 1) + 1
+    version: ((factura as any).version || 1) + 1
   };
-
-  if (factura.id) {
-    await db.facturas.update(factura.id, updatedFactura);
+  if (factura!.id) {
+    await db.facturas.update(factura!.id, updatedFactura);
   }
 
-  // Actualizar también la lectura en readings
-  let readingId = typeof factura.lectura_id === 'number' ? factura.lectura_id : undefined;
-  if (!readingId && factura.factura_id) {
-    const reading = await db.readings.where('factura_id').equals(factura.factura_id).first();
-    if (reading?.id) readingId = reading.id;
+  // Actualización inmediata directa en Firestore para producción (Vercel)
+  try {
+    const cleanReading = sanitizeFirestoreData({ ...updatedReading });
+    const cleanFactura = sanitizeFirestoreData({ ...updatedFactura });
+
+    const readingKey = String(cleanReading.uuid || cleanReading.id);
+    const facturaKey = String(cleanFactura.uuid || cleanFactura.factura_id || cleanFactura.id);
+
+    await Promise.all([
+      setDoc(doc(firestoreDb, 'readings', readingKey), cleanReading, { merge: true }),
+      setDoc(doc(firestoreDb, 'facturas', facturaKey), cleanFactura, { merge: true })
+    ]);
+    console.log('[registrarPagoFactura] ✅ Pago guardado directamente en Firestore con éxito');
+  } catch (directErr) {
+    console.warn('[registrarPagoFactura] Guardado directo a Firestore falló (se usará cola offline):', directErr);
   }
 
-  if (readingId) {
-    await db.readings.update(readingId, {
-      status: 'paid',
-      updated_at: now
-    });
-    const updatedReading = await db.readings.get(readingId);
-    if (updatedReading) {
-      await syncService.addToQueue('reading', updatedReading);
-    }
+  // Encolar también en sincronización Dexie
+  try {
+    await syncService.addToQueue('reading', updatedReading);
+    await syncService.addToQueue('factura', updatedFactura);
+  } catch (queueErr) {
+    console.warn('[registrarPagoFactura] Error encolando:', queueErr);
   }
 
-  await syncService.addToQueue('factura', updatedFactura);
   return updatedFactura;
 }
 

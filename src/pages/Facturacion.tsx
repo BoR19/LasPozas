@@ -35,23 +35,46 @@ export default function FacturacionPage() {
   const [payingReading, setPayingReading] = useState<EnrichedInvoice | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState(false);
 
-  // Fetch readings and match with users
+  // Fetch readings and match with users and facturas
   const invoices = useLiveQuery(async () => {
     const allReadings = await db.readings.reverse().sortBy('date');
+    const allFacturas = await db.facturas.toArray();
     const allUsers = await db.users.toArray();
+
     const userMap = new Map<string, User>();
     allUsers.forEach(u => {
       if (u.id) userMap.set(u.id, u);
     });
 
+    const facturaMap = new Map<string, any>();
+    allFacturas.forEach(f => {
+      if (f.factura_id) facturaMap.set(f.factura_id, f);
+      if (f.uuid) facturaMap.set(f.uuid, f);
+      if (f.lectura_id) facturaMap.set(String(f.lectura_id), f);
+    });
+
     return allReadings.map(r => {
       const u = userMap.get(r.user_id);
+      const relatedFactura = 
+        (r.factura_id ? facturaMap.get(r.factura_id) : undefined) ||
+        (r.uuid ? facturaMap.get(r.uuid) : undefined) ||
+        (r.id ? facturaMap.get(String(r.id)) : undefined);
+
+      const isPaid = 
+        r.status === 'paid' || 
+        r.estado_pago === 'pagado' || 
+        relatedFactura?.estado === 'pagado' || 
+        relatedFactura?.estado_pago === 'pagado';
+
       return {
         ...r,
+        status: isPaid ? 'paid' : (r.status || 'pending'),
+        estado_pago: isPaid ? 'pagado' : 'pendiente',
+        isPaid,
         userName: u?.name || 'Usuario desconocido',
         meterId: u?.meter_id || 'N/A',
         userCategory: u?.category || 'Residencial'
-      } as EnrichedInvoice;
+      } as EnrichedInvoice & { isPaid: boolean };
     });
   }, []);
 
@@ -63,15 +86,15 @@ export default function FacturacionPage() {
     
     if (!matchesSearch) return false;
 
-    if (statusFilter === 'pending') return item.status === 'pending';
-    if (statusFilter === 'paid') return item.status === 'paid';
+    if (statusFilter === 'pending') return !item.isPaid;
+    if (statusFilter === 'paid') return item.isPaid;
     return true;
   });
 
   // Calculate totals
   const totalAmount = invoices?.reduce((acc, curr) => acc + (curr.bill_details?.total || 0), 0) || 0;
-  const paidAmount = invoices?.filter(i => i.status === 'paid').reduce((acc, curr) => acc + (curr.bill_details?.total || 0), 0) || 0;
-  const pendingAmount = invoices?.filter(i => i.status === 'pending').reduce((acc, curr) => acc + (curr.bill_details?.total || 0), 0) || 0;
+  const paidAmount = invoices?.filter(i => i.isPaid).reduce((acc, curr) => acc + (curr.bill_details?.total || 0), 0) || 0;
+  const pendingAmount = invoices?.filter(i => !i.isPaid).reduce((acc, curr) => acc + (curr.bill_details?.total || 0), 0) || 0;
 
   const handleConfirmPaymentModal = async (details: {
     metodo_pago: 'efectivo' | 'qr_fie' | 'qr_altoke';
@@ -79,11 +102,11 @@ export default function FacturacionPage() {
     cambio?: number;
   }) => {
     if (!payingReading) return;
-    const facturaIdentifier = payingReading.factura_id || payingReading.id;
-    if (!facturaIdentifier) return;
 
     await registrarPagoFactura({
-      facturaId: facturaIdentifier,
+      facturaId: payingReading.factura_id || payingReading.id,
+      readingId: payingReading.id,
+      readingUuid: payingReading.uuid,
       metodo_pago: details.metodo_pago,
       monto_recibido: details.monto_recibido,
       cambio: details.cambio
@@ -188,7 +211,7 @@ export default function FacturacionPage() {
             <tbody className="divide-y divide-zinc-100">
               {filteredInvoices && filteredInvoices.length > 0 ? (
                 filteredInvoices.map((inv) => {
-                  const isPaid = inv.status === 'paid';
+                  const isPaid = Boolean(inv.isPaid ?? (inv.status === 'paid' || inv.estado_pago === 'pagado'));
                   const total = inv.bill_details?.total || 0;
 
                   return (
