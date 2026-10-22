@@ -74,8 +74,13 @@
         "lectura_id": { "description": "Referenced reading ID" },
         "fecha": { "type": "number", "description": "Invoice issue date timestamp" },
         "tipo_factura": { "type": "string", "description": "Type of invoice: regular, primera, or reconexion" },
+        "tipo": { "type": "string", "enum": ["nueva", "normal", "reconexion"], "description": "Invoice type: nueva, normal, or reconexion" },
         "es_reconexion": { "type": "boolean", "description": "Whether this invoice was generated for reconnection" },
+        "desglose": { "type": "object", "description": "Detailed billing breakdown (cargo_fijo, conexion, reconexion, base_m3, base_costo, exceso_m3, exceso_costo)" },
         "detalle": { "type": "object", "description": "Detailed billing breakdown" },
+        "estado_pago": { "type": "string", "enum": ["pendiente", "pagado"], "description": "Payment status" },
+        "metodo_pago": { "type": "string", "enum": ["efectivo", "qr_fie", "qr_altoke"], "description": "Payment method used" },
+        "fecha_pago": { "type": "number", "description": "Payment timestamp" },
         "uuid": { "type": "string", "description": "Global unique identifier" },
         "updated_at": { "type": "number", "description": "Last update timestamp" },
         "version": { "type": "number", "description": "Record version" }
@@ -96,11 +101,28 @@
         "porcentaje_alcantarillado": { "type": "number", "description": "Sewer percentage surcharge" },
         "fecha_inicio": { "type": "number", "description": "Start validity timestamp" },
         "fecha_fin": { "type": "number", "description": "End validity timestamp" },
+        "activa": { "type": "boolean", "description": "Whether this tariff version is currently active" },
         "uuid": { "type": "string", "description": "Global unique identifier" },
         "updated_at": { "type": "number", "description": "Last update timestamp" },
         "version": { "type": "number", "description": "Record version" }
       },
       "required": ["categoria", "cargo_fijo_mensual", "costo_m3_base", "costo_m3_exceso", "uuid"]
+    },
+    "PaymentConfig": {
+      "title": "PaymentConfig",
+      "description": "Payment configuration, static QR codes and bank details.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Configuration document identifier (e.g. pagos)" },
+        "qr_fie_url": { "type": "string", "description": "Image data URL or URL for Banco FIE QR" },
+        "qr_altoke_url": { "type": "string", "description": "Image data URL or URL for Altoke QR" },
+        "titular": { "type": "string", "description": "Account holder name" },
+        "banco": { "type": "string", "description": "Bank or institution name" },
+        "uuid": { "type": "string", "description": "Global unique identifier" },
+        "updated_at": { "type": "number", "description": "Last update timestamp" },
+        "version": { "type": "number", "description": "Record version" }
+      },
+      "required": ["id", "titular", "banco", "uuid"]
     },
     "Staff": {
       "title": "Staff",
@@ -138,6 +160,10 @@
     "/tarifas/{tarifaId}": {
       "schema": { "$ref": "#/entities/Tariff" },
       "description": "Active tariff structures"
+    },
+    "/configuracion/{configId}": {
+      "schema": { "$ref": "#/entities/PaymentConfig" },
+      "description": "System payment and general configuration"
     },
     "/staff/{staffId}": {
       "schema": { "$ref": "#/entities/Staff" },

@@ -73,6 +73,12 @@ export interface Reading {
   consumption: number;
   date: number;
   status: 'paid' | 'pending' | 'overdue';
+  estado_pago?: 'pendiente' | 'pagado';
+  metodo_pago?: 'efectivo' | 'qr_fie' | 'qr_altoke';
+  fecha_pago?: number | null;
+  monto_recibido?: number;
+  cambio?: number;
+  desglose?: InvoiceDesglose;
   detalle?: InvoiceDetalle;
   bill_details?: {
     water_cost: number;
@@ -99,15 +105,34 @@ export interface Reading {
   version: number;
 }
 
+export interface InvoiceDesglose {
+  cargo_fijo: number;
+  conexion: number;
+  reconexion: number;
+  base_m3: number;
+  base_costo: number;
+  exceso_m3: number;
+  exceso_costo: number;
+  consumo_m3?: number;
+  costo_consumo?: number;
+  total?: number;
+}
+
 export interface Invoice {
   id?: number;
   factura_id: string;
-  tipo_factura?: 'regular' | 'primera' | 'reconexion';
+  tipo?: 'nueva' | 'normal' | 'reconexion';
+  tipo_factura?: 'nueva' | 'normal' | 'reconexion' | 'regular' | 'primera';
   es_primera_factura?: boolean;
   es_reconexion?: boolean;
   total: number;
   consumo: number;
   estado: 'pendiente' | 'pagado' | 'anulado';
+  estado_pago?: 'pendiente' | 'pagado';
+  metodo_pago?: 'efectivo' | 'qr_fie' | 'qr_altoke';
+  fecha_pago?: number | null;
+  monto_recibido?: number;
+  cambio?: number;
   usuario_id: string;
   user_id: string;
   medidor_id: string;
@@ -119,6 +144,7 @@ export interface Invoice {
   categoria?: UserCategory;
   lectura_anterior?: number;
   lectura_actual?: number;
+  desglose?: InvoiceDesglose;
   detalle?: InvoiceDetalle;
   bill_details?: {
     water_cost: number;
@@ -148,13 +174,31 @@ export interface Tariff {
   id?: number;
   categoria: UserCategory;
   cargo_fijo_mensual: number;
+  cargo_fijo?: number;
   costo_m3_base: number; // 0-20 m3
+  base?: number;
   costo_m3_exceso: number; // >20 m3
+  exceso?: number;
   tarifa_conexion: number;
+  conexion?: number;
   tarifa_reconexion?: number; // Reconexión = 50% de conexión
+  reconexion?: number;
   porcentaje_alcantarillado: number;
   fecha_inicio: number;
   fecha_fin: number;
+  activa?: boolean;
+  uuid: string;
+  updated_at: number;
+  version: number;
+}
+
+export interface PaymentConfig {
+  id: string; // 'pagos'
+  qr_fie_url: string;
+  qr_altoke_url: string;
+  titular: string;
+  banco: string;
+  cuenta?: string;
   uuid: string;
   updated_at: number;
   version: number;
@@ -173,7 +217,7 @@ export interface Staff {
 
 export interface PendingSync {
   id?: number;
-  type: 'reading' | 'user' | 'tarifa' | 'staff' | 'medidor' | 'factura';
+  type: 'reading' | 'user' | 'tarifa' | 'staff' | 'medidor' | 'factura' | 'configuracion';
   data: string; // JSON string
   status: 'pending' | 'synced';
   created_at: number;
@@ -186,6 +230,7 @@ export class AppDatabase extends Dexie {
   facturas!: Table<Invoice>;
   tariffs!: Table<Tariff>;
   staff!: Table<Staff>;
+  configuracion!: Table<PaymentConfig>;
   pending_sync!: Table<PendingSync>;
 
   constructor() {
@@ -262,6 +307,47 @@ export class AppDatabase extends Dexie {
         console.warn('Upgrade error in version 7:', err);
       }
     });
+
+    this.version(8).stores({
+      users: 'id, name, meter_id, category, estado, uuid',
+      medidores: 'id, meter_id, user_id, uuid',
+      readings: '++id, user_id, medidor_id, date, status, uuid, factura_id',
+      facturas: '++id, factura_id, usuario_id, user_id, medidor_id, lectura_id, tipo, fecha, estado, estado_pago, uuid',
+      tariffs: '++id, categoria, fecha_inicio, fecha_fin, activa, uuid',
+      staff: '++id, username, role, uuid',
+      configuracion: 'id, uuid, updated_at',
+      pending_sync: '++id, type, status, created_at'
+    }).upgrade(async (tx) => {
+      try {
+        const tariffs = await tx.table('tariffs').toArray();
+        for (const t of tariffs) {
+          if (t.activa === undefined) {
+            const now = Date.now();
+            const isCurrentlyActive = t.fecha_inicio <= now && t.fecha_fin >= now;
+            await tx.table('tariffs').update(t.id, {
+              activa: isCurrentlyActive,
+              cargo_fijo: t.cargo_fijo_mensual,
+              conexion: t.tarifa_conexion,
+              reconexion: t.tarifa_reconexion ?? Math.round(t.tarifa_conexion * 0.5 * 100) / 100,
+              base: t.costo_m3_base,
+              exceso: t.costo_m3_exceso
+            });
+          }
+        }
+
+        const facturas = await tx.table('facturas').toArray();
+        for (const f of facturas) {
+          const updates: any = {};
+          if (!f.estado_pago) updates.estado_pago = f.estado === 'pagado' ? 'pagado' : 'pendiente';
+          if (!f.tipo) updates.tipo = f.es_reconexion ? 'reconexion' : f.es_primera_factura ? 'nueva' : 'normal';
+          if (Object.keys(updates).length > 0) {
+            await tx.table('facturas').update(f.id, updates);
+          }
+        }
+      } catch (err) {
+        console.warn('Upgrade error in version 8:', err);
+      }
+    });
   }
 }
 
@@ -298,42 +384,70 @@ export async function seedDatabase() {
     {
       categoria: 'Residencial Social',
       cargo_fijo_mensual: 3,
+      cargo_fijo: 3,
       costo_m3_base: 0.50,
+      base: 0.50,
       costo_m3_exceso: 0.80,
+      exceso: 0.80,
       tarifa_conexion: 50,
+      conexion: 50,
+      tarifa_reconexion: 25,
+      reconexion: 25,
       porcentaje_alcantarillado: 20,
       fecha_inicio: new Date('2023-12-31').getTime(),
-      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime(),
+      activa: true
     },
     {
       categoria: 'Residencial',
       cargo_fijo_mensual: 7,
+      cargo_fijo: 7,
       costo_m3_base: 1.20,
+      base: 1.20,
       costo_m3_exceso: 1.80,
+      exceso: 1.80,
       tarifa_conexion: 100,
+      conexion: 100,
+      tarifa_reconexion: 50,
+      reconexion: 50,
       porcentaje_alcantarillado: 20,
       fecha_inicio: new Date('2023-12-31').getTime(),
-      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime(),
+      activa: true
     },
     {
       categoria: 'Comercial',
       cargo_fijo_mensual: 17,
+      cargo_fijo: 17,
       costo_m3_base: 2.50,
+      base: 2.50,
       costo_m3_exceso: 3.50,
+      exceso: 3.50,
       tarifa_conexion: 200,
+      conexion: 200,
+      tarifa_reconexion: 100,
+      reconexion: 100,
       porcentaje_alcantarillado: 20,
       fecha_inicio: new Date('2023-12-31').getTime(),
-      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime(),
+      activa: true
     },
     {
       categoria: 'Industrial',
       cargo_fijo_mensual: 40,
+      cargo_fijo: 40,
       costo_m3_base: 4.00,
+      base: 4.00,
       costo_m3_exceso: 6.00,
+      exceso: 6.00,
       tarifa_conexion: 500,
+      conexion: 500,
+      tarifa_reconexion: 250,
+      reconexion: 250,
       porcentaje_alcantarillado: 20,
       fecha_inicio: new Date('2023-12-31').getTime(),
-      fecha_fin: new Date('2030-12-30T23:59:59').getTime()
+      fecha_fin: new Date('2030-12-30T23:59:59').getTime(),
+      activa: true
     }
   ];
 
@@ -354,11 +468,18 @@ export async function seedDatabase() {
       // Sincronizar tarifas vigentes
       await db.tariffs.update(existing.id!, {
         cargo_fijo_mensual: tariff.cargo_fijo_mensual,
+        cargo_fijo: tariff.cargo_fijo,
         tarifa_conexion: tariff.tarifa_conexion,
+        conexion: tariff.conexion,
+        tarifa_reconexion: tariff.tarifa_reconexion,
+        reconexion: tariff.reconexion,
         costo_m3_base: tariff.costo_m3_base,
+        base: tariff.base,
         costo_m3_exceso: tariff.costo_m3_exceso,
+        exceso: tariff.exceso,
         fecha_inicio: tariff.fecha_inicio,
         fecha_fin: tariff.fecha_fin,
+        activa: existing.activa !== undefined ? existing.activa : true,
         updated_at: Date.now()
       });
     }
@@ -439,9 +560,45 @@ export async function seedDatabase() {
         await db.users.update(u.id, { estado: 'activo' });
       }
     }
-  } catch (userStatusErr) {
-    console.warn('Error inicializando estados de usuario:', userStatusErr);
+  } catch (uErr) {
+    console.warn('Error actualizando estados de usuarios:', uErr);
   }
+
+  // Asegurar que exista configuración de pagos (FIE y Altoke)
+  try {
+    const existingConfig = await db.configuracion.get('pagos');
+    if (!existingConfig) {
+      await db.configuracion.add({
+        id: 'pagos',
+        qr_fie_url: '',
+        qr_altoke_url: '',
+        titular: 'Comité de Agua Potable Tolomosita Oeste',
+        banco: 'Banco FIE S.A. / Altoke',
+        cuenta: 'Cuenta Corriente / Ahorros',
+        uuid: 'config-pagos-tolomosita-oeste',
+        updated_at: Date.now(),
+        version: 1
+      });
+    }
+  } catch (cfgErr) {
+    console.warn('Error inicializando configuracion de pagos:', cfgErr);
+  }
+}
+
+export async function getPaymentConfig(): Promise<PaymentConfig> {
+  const cfg = await db.configuracion.get('pagos');
+  if (cfg) return cfg;
+  return {
+    id: 'pagos',
+    qr_fie_url: '',
+    qr_altoke_url: '',
+    titular: 'Comité de Agua Potable Tolomosita Oeste',
+    banco: 'Banco FIE S.A. / Altoke',
+    cuenta: 'Cuenta Corriente / Ahorros',
+    uuid: 'config-pagos-tolomosita-oeste',
+    updated_at: Date.now(),
+    version: 1
+  };
 }
 
 export async function changePassword(staffId: number, currentPassword: string, newPassword: string) {

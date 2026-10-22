@@ -29,6 +29,7 @@ const getTable = (name: string) => {
   if (name === 'medidor' || name === 'medidores' || name === 'meters') return localDb.medidores;
   if (name === 'factura' || name === 'facturas' || name === 'invoices') return localDb.facturas;
   if (name === 'staff' || name === 'staffs') return localDb.staff;
+  if (name === 'configuracion') return localDb.configuracion;
   return (localDb as any)[name];
 };
 
@@ -36,7 +37,7 @@ let syncTimeout: any = null;
 let isSyncing = false;
 
 export const syncService = {
-  async addToQueue(type: 'reading' | 'user' | 'tarifa' | 'staff' | 'medidor' | 'factura', data: any) {
+  async addToQueue(type: 'reading' | 'user' | 'tarifa' | 'staff' | 'medidor' | 'factura' | 'configuracion', data: any) {
     const processedData = { ...data };
     if (processedData.imagen instanceof Blob) {
       processedData.imagen = await blobToBase64(processedData.imagen);
@@ -78,6 +79,7 @@ export const syncService = {
             item.type === 'staff' ? 'staff' : 
             item.type === 'medidor' ? 'medidores' :
             item.type === 'factura' ? 'facturas' :
+            item.type === 'configuracion' ? 'configuracion' :
             `${item.type}s`;
 
           const itemUuid = data.uuid || data.id;
@@ -138,7 +140,7 @@ export const syncService = {
   },
 
   initRealtimeSync() {
-    const collections = ['users', 'readings', 'tarifas', 'staff', 'medidores', 'facturas'];
+    const collections = ['users', 'readings', 'tarifas', 'staff', 'medidores', 'facturas', 'configuracion'];
     
     collections.forEach(colName => {
       onSnapshot(collection(firestoreDb, colName), async (snapshot) => {

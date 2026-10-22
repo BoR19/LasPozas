@@ -1,8 +1,9 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { type Reading, type User, type Tariff } from '../../database/db';
-import { formatDate } from '../../lib/utils';
-import { X } from 'lucide-react';
+import QRCode from 'qrcode';
+import { type Reading, type User, type Tariff, type PaymentConfig, getPaymentConfig } from '../../database/db';
+import { formatDate, formatCurrency } from '../../lib/utils';
+import { X, CheckCircle2 } from 'lucide-react';
 import { domToPng } from 'modern-screenshot';
 import ReceiptHeader from './ReceiptHeader';
 import ReceiptInfo from './ReceiptInfo';
@@ -20,6 +21,9 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
   const receiptRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const [isProcessing, setIsProcessing] = useState<'sharing' | 'downloading' | null>(null);
+  const [paymentConfig, setPaymentConfig] = useState<PaymentConfig | null>(null);
+  const [qrFieImg, setQrFieImg] = useState<string>('');
+  const [qrAltokeImg, setQrAltokeImg] = useState<string>('');
 
   console.log("Receipt component rendered with:", { reading, user, tariff });
 
@@ -37,6 +41,42 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
       </div>
     );
   }
+
+  const isPaid = reading.status === 'paid' || reading.estado_pago === 'pagado';
+  const totalPagar = Number(reading.detalle?.total ?? reading.bill_details?.total ?? 0);
+
+  useEffect(() => {
+    async function loadPaymentDetails() {
+      try {
+        const cfg = await getPaymentConfig();
+        setPaymentConfig(cfg);
+
+        if (cfg.qr_fie_url) {
+          setQrFieImg(cfg.qr_fie_url);
+        } else {
+          const fieGen = await QRCode.toDataURL(
+            `FIE|TOLOMOSITA|BS:${totalPagar.toFixed(2)}|FAC:${reading.factura_id || reading.id}`,
+            { width: 180, margin: 1 }
+          );
+          setQrFieImg(fieGen);
+        }
+
+        if (cfg.qr_altoke_url) {
+          setQrAltokeImg(cfg.qr_altoke_url);
+        } else {
+          const altokeGen = await QRCode.toDataURL(
+            `ALTOKE|TOLOMOSITA|BS:${totalPagar.toFixed(2)}|FAC:${reading.factura_id || reading.id}`,
+            { width: 180, margin: 1 }
+          );
+          setQrAltokeImg(altokeGen);
+        }
+      } catch (err) {
+        console.warn('Error cargando QRs en comprobante:', err);
+      }
+    }
+
+    loadPaymentDetails();
+  }, [totalPagar, reading]);
 
   const safeTariff: Tariff = tariff || {
     id: 0,
@@ -151,7 +191,6 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
         <ReceiptHeader reading={reading} user={user} />
         <ReceiptInfo user={user} reading={reading} />
         <ReceiptTotals reading={reading} tariff={safeTariff} />
-        <ReceiptFooter />
         
         {isReconexion && (
           <div className="text-center mt-4 px-3 py-1.5 bg-amber-50 text-amber-800 rounded-xl text-[11px] font-black uppercase tracking-wider border border-amber-200 print:border-zinc-300">
@@ -164,14 +203,87 @@ export default function Receipt({ reading, user, tariff }: ReceiptProps) {
             Primera Factura — Incluye Conexión
           </div>
         )}
+
+        {/* SECCIÓN PAGADO vs MÉTODO DE PAGO */}
+        {isPaid ? (
+          /* Sello PAGADO */
+          <div className="mt-6 p-4 rounded-2xl border-2 border-dashed border-emerald-500 bg-emerald-50/60 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-emerald-500 text-white flex items-center justify-center shrink-0">
+                <CheckCircle2 className="w-6 h-6" />
+              </div>
+              <div className="text-left">
+                <span className="text-emerald-900 font-black tracking-wider text-xs uppercase block">
+                  COMPROBANTE PAGADO
+                </span>
+                <p className="text-[11px] text-emerald-700 font-medium mt-0.5">
+                  Método: {reading.metodo_pago ? reading.metodo_pago.replace('_', ' ').toUpperCase() : 'EFECTIVO'}
+                  {reading.fecha_pago ? ` • ${formatDate(reading.fecha_pago)}` : ''}
+                </p>
+              </div>
+            </div>
+            <div className="px-3 py-1 bg-emerald-600 text-white font-black text-xs uppercase tracking-widest rounded-xl transform rotate-2 shadow-sm">
+              PAGADO
+            </div>
+          </div>
+        ) : (
+          /* Sección MÉTODO DE PAGO con QRs */
+          <div className="mt-6 pt-5 border-t border-zinc-100 space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] font-black uppercase tracking-wider text-zinc-500">
+                MÉTODO DE PAGO
+              </span>
+              <span className="text-xs font-black text-blue-600 font-mono">
+                {formatCurrency(totalPagar)}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {/* QR Banco FIE */}
+              <div className="bg-zinc-50 p-2.5 rounded-2xl border border-zinc-200/80 flex flex-col items-center text-center">
+                <div className="w-24 h-24 sm:w-28 sm:h-28 bg-white p-1 rounded-xl border border-zinc-200 flex items-center justify-center overflow-hidden">
+                  {qrFieImg ? (
+                    <img src={qrFieImg} alt="QR Banco FIE" className="w-full h-full object-contain" />
+                  ) : (
+                    <span className="text-[9px] text-zinc-400">QR FIE</span>
+                  )}
+                </div>
+                <span className="text-[10px] font-black text-blue-700 uppercase mt-1.5 tracking-tight">
+                  Banco FIE
+                </span>
+              </div>
+
+              {/* QR Altoke */}
+              <div className="bg-zinc-50 p-2.5 rounded-2xl border border-zinc-200/80 flex flex-col items-center text-center">
+                <div className="w-24 h-24 sm:w-28 sm:h-28 bg-white p-1 rounded-xl border border-zinc-200 flex items-center justify-center overflow-hidden">
+                  {qrAltokeImg ? (
+                    <img src={qrAltokeImg} alt="QR Altoke" className="w-full h-full object-contain" />
+                  ) : (
+                    <span className="text-[9px] text-zinc-400">QR Altoke</span>
+                  )}
+                </div>
+                <span className="text-[10px] font-black text-amber-700 uppercase mt-1.5 tracking-tight">
+                  Altoke
+                </span>
+              </div>
+            </div>
+
+            <div className="text-center text-[10px] text-zinc-500 leading-tight pt-1">
+              <p className="font-bold text-zinc-700">{paymentConfig?.titular || 'Comité de Agua Potable Tolomosita Oeste'}</p>
+              <p>{paymentConfig?.banco || 'Banco FIE S.A. / Altoke'}{paymentConfig?.cuenta ? ` • ${paymentConfig.cuenta}` : ''}</p>
+            </div>
+          </div>
+        )}
+
+        <ReceiptFooter />
         
         <div className="flex justify-center mt-4">
           <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${
-            reading.status === 'paid' ? 'bg-green-100 text-green-700' :
+            isPaid ? 'bg-green-100 text-green-700' :
             reading.status === 'pending' ? 'bg-amber-100 text-amber-700' :
             'bg-red-100 text-red-700'
           }`}>
-            {reading.status === 'paid' ? '🟢 Pagado' : 
+            {isPaid ? '🟢 Pagado' : 
              reading.status === 'pending' ? '🟡 Pendiente' : '🔴 Vencido'}
           </span>
         </div>

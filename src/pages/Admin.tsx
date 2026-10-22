@@ -3,11 +3,11 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Tariff, type UserCategory, type Staff, encodePassword, changePassword } from '../database/db';
 import { syncService } from '../services/syncService';
 import { v4 as uuidv4 } from 'uuid';
-import { formatDate, formatCurrency } from '../lib/utils';
+import { cn, formatDate, formatCurrency } from '../lib/utils';
 import ConfirmModal from '../components/ConfirmModal';
 import { useAuth } from '../hooks/useAuth';
-import { cn } from '../lib/utils';
-import { Lock, Shield, UserPlus, Users, Trash2, DollarSign, Plus } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Lock, Shield, UserPlus, Users, Trash2, DollarSign, Plus, QrCode } from 'lucide-react';
 
 export default function AdminPage() {
   const { isAdmin, user } = useAuth();
@@ -68,6 +68,7 @@ export default function AdminPage() {
         const closedTariff = {
           ...oldTariff,
           fecha_fin: ayerMs,
+          activa: false,
           updated_at: Date.now(),
           version: (oldTariff.version || 1) + 1
         };
@@ -84,6 +85,12 @@ export default function AdminPage() {
     const tariffData = {
       ...newTariff,
       tarifa_reconexion: finalReconexion,
+      cargo_fijo: newTariff.cargo_fijo_mensual,
+      conexion: newTariff.tarifa_conexion,
+      reconexion: finalReconexion,
+      base: newTariff.costo_m3_base,
+      exceso: newTariff.costo_m3_exceso,
+      activa: true,
       fecha_inicio: inicioMs,
       fecha_fin: finMs,
       uuid: uuidv4(),
@@ -209,6 +216,28 @@ export default function AdminPage() {
           <p className="text-zinc-500 font-medium">Gestión de tarifas, personal y seguridad</p>
         </div>
       </div>
+
+      {/* Métodos de Pago y Códigos QR */}
+      <section className="space-y-4">
+        <div className="flex items-center gap-2">
+          <QrCode className="w-5 h-5 text-blue-600" />
+          <h2 className="text-xl font-black text-zinc-900 tracking-tight">Cobros y Métodos de Pago</h2>
+        </div>
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200/80 rounded-3xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <h3 className="text-base font-black text-zinc-900">Códigos QR de Pago (Banco FIE y Altoke)</h3>
+            <p className="text-xs text-zinc-600 font-medium max-w-xl">
+              Configura las imágenes oficiales de los códigos QR para comprobantes digitales, tickets térmicos de 80mm y la ventana de cobro rápido.
+            </p>
+          </div>
+          <Link
+            to="/admin/configuracion-pagos"
+            className="inline-flex items-center justify-center gap-2 px-5 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs shadow-md shadow-blue-200 transition-all shrink-0 active:scale-95"
+          >
+            <QrCode className="w-4 h-4" /> Configurar QR y Cuentas
+          </Link>
+        </div>
+      </section>
 
       {/* Security Management */}
       <section className="space-y-6">

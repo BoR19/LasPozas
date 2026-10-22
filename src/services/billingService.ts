@@ -99,6 +99,19 @@ export function calculateBill(
     } : undefined
   };
 
+  const desglose = {
+    cargo_fijo,
+    conexion,
+    reconexion,
+    base_m3: consumo_base,
+    base_costo: monto_base,
+    exceso_m3: consumo_exceso,
+    exceso_costo: monto_exceso,
+    consumo_m3,
+    costo_consumo,
+    total
+  };
+
   return {
     water_cost: costo_consumo,
     fixed_charge: cargo_fijo,
@@ -114,23 +127,38 @@ export function calculateBill(
     es_primera_factura: isFirst,
     es_reconexion: false,
     tipo_factura: isFirst ? ('primera' as const) : ('regular' as const),
+    tipo: isFirst ? ('nueva' as const) : ('normal' as const),
     total,
     tariff_id: tariff?.id || 0,
-    detalle
+    detalle,
+    desglose
   };
 }
 
 /**
- * Busca la tarifa correcta por categoria y por fecha vigente (la que esté entre fecha_inicio y fecha_fin).
+ * Busca la tarifa correcta por categoria y por fecha vigente (la que esté entre fecha_inicio y fecha_fin y esté activa).
  * Si no está cargada en base de datos, usa los valores reglamentarios por defecto con reconexión = 50% de conexión.
  */
 export async function getActiveTariff(category: UserCategory, date: number = Date.now()): Promise<Tariff> {
+  // 1. Tarifa vigente en fecha y activa
   let tariff = await db.tariffs
     .where('categoria')
     .equals(category)
-    .filter(t => t.fecha_inicio <= date && t.fecha_fin >= date)
+    .filter(t => t.fecha_inicio <= date && t.fecha_fin >= date && t.activa !== false)
     .first();
 
+  // 2. Si no encontró por rango estricto, buscar la última activa
+  if (!tariff) {
+    tariff = await db.tariffs
+      .where('categoria')
+      .equals(category)
+      .filter(t => t.activa !== false)
+      .reverse()
+      .sortBy('fecha_inicio')
+      .then(tariffs => tariffs[0]);
+  }
+
+  // 3. Fallback a la más reciente de esa categoría
   if (!tariff) {
     tariff = await db.tariffs
       .where('categoria')
@@ -146,20 +174,33 @@ export async function getActiveTariff(category: UserCategory, date: number = Dat
       id: 0,
       categoria: category,
       cargo_fijo_mensual: config.cargo_fijo,
+      cargo_fijo: config.cargo_fijo,
       tarifa_conexion: config.conexion,
+      conexion: config.conexion,
       tarifa_reconexion: config.reconexion,
+      reconexion: config.reconexion,
       costo_m3_base: config.base,
+      base: config.base,
       costo_m3_exceso: config.exceso,
+      exceso: config.exceso,
       porcentaje_alcantarillado: 20,
       fecha_inicio: new Date('2023-12-31').getTime(),
       fecha_fin: new Date('2030-12-30T23:59:59').getTime(),
+      activa: true,
       uuid: `tarifa-default-${category.toLowerCase().replace(/\s+/g, '-')}`,
       updated_at: Date.now(),
       version: 1
     };
-  } else if (tariff.tarifa_reconexion === undefined) {
-    // Asegurar campo reconexión si la tarifa existente no lo tiene
-    tariff.tarifa_reconexion = Math.round((tariff.tarifa_conexion || 0) * 0.5 * 100) / 100;
+  } else {
+    if (tariff.tarifa_reconexion === undefined) {
+      tariff.tarifa_reconexion = Math.round((tariff.tarifa_conexion || 0) * 0.5 * 100) / 100;
+    }
+    tariff.cargo_fijo = tariff.cargo_fijo_mensual;
+    tariff.conexion = tariff.tarifa_conexion;
+    tariff.reconexion = tariff.tarifa_reconexion;
+    tariff.base = tariff.costo_m3_base;
+    tariff.exceso = tariff.costo_m3_exceso;
+    if (tariff.activa === undefined) tariff.activa = true;
   }
 
   return tariff;
@@ -206,9 +247,12 @@ export async function crearFacturaInicial(params: {
 
   const facturaDoc: Invoice = {
     factura_id: facturaId,
+    tipo: 'nueva',
+    tipo_factura: 'nueva',
     total: bill.total,
     consumo: 0,
     estado: 'pendiente',
+    estado_pago: 'pendiente',
     usuario_id: params.userId,
     user_id: params.userId,
     medidor_id: params.meterId,
@@ -221,6 +265,18 @@ export async function crearFacturaInicial(params: {
     lectura_anterior: 0,
     lectura_actual: initialReading,
     es_primera_factura: true,
+    desglose: {
+      cargo_fijo: bill.fixed_charge,
+      conexion: bill.conexion,
+      reconexion: 0,
+      base_m3: 0,
+      base_costo: 0,
+      exceso_m3: 0,
+      exceso_costo: 0,
+      consumo_m3: 0,
+      costo_consumo: 0,
+      total: bill.total
+    },
     detalle: bill.detalle,
     bill_details: bill,
     uuid: uuidv4(),
@@ -320,9 +376,12 @@ export async function generarFacturaReconexion(user: User, date: number = Date.n
 
   const facturaDoc: Invoice = {
     factura_id: facturaId,
+    tipo: 'reconexion',
+    tipo_factura: 'reconexion',
     total,
     consumo: 0,
     estado: 'pendiente',
+    estado_pago: 'pendiente',
     usuario_id: user.id,
     user_id: user.id,
     medidor_id: user.meter_id,
@@ -336,7 +395,18 @@ export async function generarFacturaReconexion(user: User, date: number = Date.n
     lectura_actual: currentReading,
     es_primera_factura: false,
     es_reconexion: true,
-    tipo_factura: 'reconexion',
+    desglose: {
+      cargo_fijo,
+      conexion: 0,
+      reconexion,
+      base_m3: 0,
+      base_costo: 0,
+      exceso_m3: 0,
+      exceso_costo: 0,
+      consumo_m3: 0,
+      costo_consumo: 0,
+      total
+    },
     detalle,
     bill_details: readingDoc.bill_details,
     uuid: facturaUuid,
@@ -458,9 +528,12 @@ export async function registrarUsuario(data: {
     // 4. facturas - Guarda desglose completo y datos de cliente para que nunca falle
     facturaDoc = {
       factura_id: facturaId,
+      tipo: 'nueva',
+      tipo_factura: 'nueva',
       total: bill.total,
       consumo: 0,
       estado: 'pendiente',
+      estado_pago: 'pendiente',
       usuario_id: userId,
       user_id: userId,
       medidor_id: meterId,
@@ -473,6 +546,18 @@ export async function registrarUsuario(data: {
       lectura_anterior: 0,
       lectura_actual: initialReading,
       es_primera_factura: true,
+      desglose: {
+        cargo_fijo: bill.fixed_charge,
+        conexion: bill.conexion,
+        reconexion: 0,
+        base_m3: 0,
+        base_costo: 0,
+        exceso_m3: 0,
+        exceso_costo: 0,
+        consumo_m3: 0,
+        costo_consumo: 0,
+        total: bill.total
+      },
       detalle: bill.detalle,
       bill_details: bill,
       uuid: facturaUuid,
@@ -500,6 +585,80 @@ export async function registrarUsuario(data: {
     facturaId,
     readingId: createdReadingId
   };
+}
+
+/**
+ * Registra el cobro de una factura (en efectivo o vía QR estático FIE/Altoke).
+ * Actualiza de forma sincronizada facturas y readings, marcando estado_pago = 'pagado'.
+ */
+export async function registrarPagoFactura(params: {
+  facturaId: string | number;
+  metodo_pago: 'efectivo' | 'qr_fie' | 'qr_altoke';
+  monto_recibido?: number;
+  cambio?: number;
+}) {
+  const now = Date.now();
+  let factura: Invoice | undefined;
+
+  const idStr = String(params.facturaId).trim();
+  const idNum = parseInt(idStr, 10);
+
+  if (!isNaN(idNum)) {
+    factura = await db.facturas.get(idNum);
+  }
+  if (!factura) {
+    factura = await db.facturas.where('factura_id').equals(idStr).first();
+  }
+  if (!factura) {
+    factura = await db.facturas.where('uuid').equals(idStr).first();
+  }
+  if (!factura && !isNaN(idNum)) {
+    const r = await db.readings.get(idNum);
+    if (r?.factura_id) {
+      factura = await db.facturas.where('factura_id').equals(r.factura_id).first();
+    }
+  }
+
+  if (!factura) {
+    throw new Error(`No se encontró la factura con identificador "${params.facturaId}"`);
+  }
+
+  const updatedFactura: Invoice = {
+    ...factura,
+    estado: 'pagado',
+    estado_pago: 'pagado',
+    metodo_pago: params.metodo_pago,
+    fecha_pago: now,
+    monto_recibido: params.monto_recibido ?? factura.total,
+    cambio: params.cambio ?? 0,
+    updated_at: now,
+    version: (factura.version || 1) + 1
+  };
+
+  if (factura.id) {
+    await db.facturas.update(factura.id, updatedFactura);
+  }
+
+  // Actualizar también la lectura en readings
+  let readingId = typeof factura.lectura_id === 'number' ? factura.lectura_id : undefined;
+  if (!readingId && factura.factura_id) {
+    const reading = await db.readings.where('factura_id').equals(factura.factura_id).first();
+    if (reading?.id) readingId = reading.id;
+  }
+
+  if (readingId) {
+    await db.readings.update(readingId, {
+      status: 'paid',
+      updated_at: now
+    });
+    const updatedReading = await db.readings.get(readingId);
+    if (updatedReading) {
+      await syncService.addToQueue('reading', updatedReading);
+    }
+  }
+
+  await syncService.addToQueue('factura', updatedFactura);
+  return updatedFactura;
 }
 
 // Alias de compatibilidad

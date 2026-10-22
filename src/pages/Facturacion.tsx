@@ -2,8 +2,10 @@ import React, { useState } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Reading, type User } from '../database/db';
 import { syncService } from '../services/syncService';
+import { registrarPagoFactura } from '../services/billingService';
 import { formatCurrency, formatDate } from '../lib/utils';
 import { useNavigate } from 'react-router-dom';
+import PaymentModal from '../components/PaymentModal';
 import { 
   Download, 
   MessageSquare, 
@@ -11,12 +13,12 @@ import {
   CheckCircle2, 
   Clock, 
   Filter, 
-  Droplets,
-  CreditCard,
-  FileText,
-  DollarSign,
-  ChevronRight,
-  Printer
+  Droplets, 
+  CreditCard, 
+  FileText, 
+  DollarSign, 
+  ChevronRight, 
+  Printer 
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 
@@ -71,36 +73,23 @@ export default function FacturacionPage() {
   const paidAmount = invoices?.filter(i => i.status === 'paid').reduce((acc, curr) => acc + (curr.bill_details?.total || 0), 0) || 0;
   const pendingAmount = invoices?.filter(i => i.status === 'pending').reduce((acc, curr) => acc + (curr.bill_details?.total || 0), 0) || 0;
 
-  const handleCobrar = async (invoice: EnrichedInvoice) => {
-    if (!invoice.id) return;
-    setIsProcessingPayment(true);
-    try {
-      await db.readings.update(invoice.id, { 
-        status: 'paid', 
-        updated_at: Date.now() 
-      });
+  const handleConfirmPaymentModal = async (details: {
+    metodo_pago: 'efectivo' | 'qr_fie' | 'qr_altoke';
+    monto_recibido?: number;
+    cambio?: number;
+  }) => {
+    if (!payingReading) return;
+    const facturaIdentifier = payingReading.factura_id || payingReading.id;
+    if (!facturaIdentifier) return;
 
-      const updated = await db.readings.get(invoice.id);
-      if (updated) {
-        await syncService.addToQueue('reading', updated);
-      }
+    await registrarPagoFactura({
+      facturaId: facturaIdentifier,
+      metodo_pago: details.metodo_pago,
+      monto_recibido: details.monto_recibido,
+      cambio: details.cambio
+    });
 
-      const fact = await db.facturas.where('lectura_id').equals(invoice.id).first();
-      if (fact && fact.id) {
-        await db.facturas.update(fact.id, { estado: 'pagado', updated_at: Date.now() });
-        const updatedFact = await db.facturas.get(fact.id);
-        if (updatedFact) {
-          await syncService.addToQueue('factura', updatedFact);
-        }
-      }
-
-      setPayingReading(null);
-    } catch (error) {
-      console.error('Error al cobrar factura:', error);
-      alert('Error al registrar el cobro.');
-    } finally {
-      setIsProcessingPayment(false);
-    }
+    setPayingReading(null);
   };
 
   return (
@@ -260,31 +249,34 @@ export default function FacturacionPage() {
 
                       {/* Acciones */}
                       <td className="py-4 px-6">
-                        <div className="flex items-center gap-2 justify-end md:justify-start">
-                          {/* Descargar / Ver recibo */}
+                        <div className="flex items-center gap-1.5 justify-end md:justify-start">
+                          {/* Ver Comprobante Digital */}
                           <button
                             onClick={() => navigate(`/recibo/${inv.factura_id || inv.id}`)}
-                            title="Descargar o imprimir recibo"
-                            className="p-2 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 rounded-xl transition-all active:scale-95"
+                            title="Ver Comprobante Digital"
+                            className="px-2.5 py-1.5 text-zinc-600 hover:text-blue-600 hover:bg-blue-50 border border-zinc-200 rounded-xl transition-all active:scale-95 text-xs font-bold flex items-center gap-1"
                           >
-                            <Download className="w-4 h-4" />
+                            <FileText className="w-3.5 h-3.5 text-blue-600" />
+                            <span className="hidden xl:inline">Comprobante</span>
                           </button>
 
-                          {/* Detalle del recibo */}
+                          {/* Imprimir Ticket 80mm */}
                           <button
-                            onClick={() => navigate(`/recibo/${inv.factura_id || inv.id}`)}
-                            title="Ver detalles de la factura"
-                            className="p-2 text-zinc-400 hover:text-zinc-700 hover:bg-zinc-100 rounded-xl transition-all active:scale-95"
+                            onClick={() => navigate(`/recibo/${inv.factura_id || inv.id}?mode=ticket`)}
+                            title="Imprimir Ticket Térmico 80mm"
+                            className="px-2.5 py-1.5 text-zinc-600 hover:text-emerald-700 hover:bg-emerald-50 border border-zinc-200 rounded-xl transition-all active:scale-95 text-xs font-bold flex items-center gap-1"
                           >
-                            <MessageSquare className="w-4 h-4" />
+                            <Printer className="w-3.5 h-3.5 text-emerald-600" />
+                            <span className="hidden xl:inline">Ticket 80mm</span>
                           </button>
 
-                          {/* Botón Cobrar (solo para pendientes) */}
+                          {/* Botón Cobrar (solo para facturas pendientes) */}
                           {!isPaid && (
                             <button
                               onClick={() => setPayingReading(inv)}
-                              className="ml-1 px-4 py-1.5 border border-zinc-200 bg-white hover:bg-zinc-50 text-zinc-800 rounded-xl font-bold text-xs shadow-sm transition-all active:scale-95 hover:border-zinc-300"
+                              className="ml-1 px-3.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-sm shadow-blue-200 transition-all active:scale-95 flex items-center gap-1"
                             >
+                              <DollarSign className="w-3.5 h-3.5" />
                               Cobrar
                             </button>
                           )}
@@ -306,58 +298,20 @@ export default function FacturacionPage() {
         </div>
       </div>
 
-      {/* Confirmation Modal for Cobrar */}
+      {/* Modal de Cobro Completo (Efectivo con vuelto / QR Banco FIE / QR Altoke) */}
       {payingReading && (
-        <div className="fixed inset-0 bg-zinc-900/40 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in fade-in zoom-in duration-200 space-y-5">
-            <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-600 mx-auto">
-              <DollarSign className="w-6 h-6" />
-            </div>
-
-            <div className="text-center space-y-1">
-              <h3 className="text-xl font-black text-zinc-900">Registrar Cobro</h3>
-              <p className="text-xs text-zinc-500 font-medium">
-                ¿Confirmas el cobro de esta factura de agua?
-              </p>
-            </div>
-
-            <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-zinc-400 font-medium">Usuario:</span>
-                <span className="font-bold text-zinc-800">{payingReading.userName}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-zinc-400 font-medium">Consumo:</span>
-                <span className="font-bold text-zinc-800">{payingReading.consumption} m³</span>
-              </div>
-              <div className="flex justify-between text-base border-t border-zinc-200 pt-2">
-                <span className="font-bold text-zinc-600">Total a Cobrar:</span>
-                <span className="font-black text-blue-600">
-                  {(payingReading.bill_details?.total || 0).toFixed(2)} Bs
-                </span>
-              </div>
-            </div>
-
-            <div className="flex gap-3">
-              <button
-                type="button"
-                onClick={() => setPayingReading(null)}
-                disabled={isProcessingPayment}
-                className="flex-1 py-3 font-bold text-zinc-500 hover:bg-zinc-100 rounded-xl transition-all text-sm disabled:opacity-50"
-              >
-                Cancelar
-              </button>
-              <button
-                type="button"
-                onClick={() => handleCobrar(payingReading)}
-                disabled={isProcessingPayment}
-                className="flex-1 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 text-sm disabled:opacity-50"
-              >
-                {isProcessingPayment ? 'Procesando...' : 'Confirmar Cobro'}
-              </button>
-            </div>
-          </div>
-        </div>
+        <PaymentModal
+          isOpen={!!payingReading}
+          onClose={() => setPayingReading(null)}
+          onConfirmPayment={handleConfirmPaymentModal}
+          invoiceData={{
+            id: payingReading.id || '',
+            factura_id: payingReading.factura_id,
+            userName: payingReading.userName,
+            meterId: payingReading.meterId,
+            total: payingReading.bill_details?.total || 0
+          }}
+        />
       )}
     </div>
   );

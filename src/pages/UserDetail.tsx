@@ -4,7 +4,7 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db, type Reading, type Invoice, type User, type UserStatus } from '../database/db';
 import { syncService } from '../services/syncService';
 import { v4 as uuidv4 } from 'uuid';
-import { getActiveTariff, calculateBill, generarFacturaReconexion } from '../services/billingService';
+import { getActiveTariff, calculateBill, generarFacturaReconexion, registrarPagoFactura } from '../services/billingService';
 import { formatDate, formatCurrency, generateId } from '../lib/utils';
 import { 
   ArrowLeft, 
@@ -26,10 +26,12 @@ import {
   AlertTriangle,
   X,
   Check,
-  RotateCcw
+  RotateCcw,
+  Printer
 } from 'lucide-react';
 import CameraOCR from '../components/CameraOCR';
 import Receipt from '../components/Receipt/Receipt';
+import PaymentModal from '../components/PaymentModal';
 import { cn } from '../lib/utils';
 import { useAuth } from '../hooks/useAuth';
 
@@ -40,6 +42,7 @@ export default function UserDetailPage() {
   const { isAdmin } = useAuth();
   const [isReading, setIsReading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [payingReading, setPayingReading] = useState<Reading | null>(null);
 
   // Estados de suspensión y baja temporal
   const [showMenu, setShowMenu] = useState(false);
@@ -278,20 +281,27 @@ export default function UserDetailPage() {
     }
   };
 
-  const markAsPaid = async (readingId: number) => {
-    await db.readings.update(readingId, { status: 'paid', updated_at: Date.now() });
-    const updated = await db.readings.get(readingId);
-    if (updated) {
-      await syncService.addToQueue('reading', updated);
-    }
-    const relatedFactura = await db.facturas.where('lectura_id').equals(readingId).first();
-    if (relatedFactura && relatedFactura.id) {
-      await db.facturas.update(relatedFactura.id, { estado: 'pagado', updated_at: Date.now() });
-      const updatedFact = await db.facturas.get(relatedFactura.id);
-      if (updatedFact) {
-        await syncService.addToQueue('factura', updatedFact);
-      }
-    }
+  const handleConfirmPaymentModal = async (details: {
+    metodo_pago: 'efectivo' | 'qr_fie' | 'qr_altoke';
+    monto_recibido?: number;
+    cambio?: number;
+  }) => {
+    if (!payingReading) return;
+    const targetFacturaId = payingReading.factura_id || payingReading.id;
+    if (!targetFacturaId) return;
+
+    await registrarPagoFactura({
+      facturaId: targetFacturaId,
+      metodo_pago: details.metodo_pago,
+      monto_recibido: details.monto_recibido,
+      cambio: details.cambio
+    });
+
+    setPayingReading(null);
+  };
+
+  const markAsPaid = async (reading: Reading) => {
+    setPayingReading(reading);
   };
 
   if (!user) return null;
@@ -790,25 +800,41 @@ export default function UserDetailPage() {
                     <p className="text-xs text-zinc-400 font-bold uppercase tracking-widest">Total</p>
                     <p className="text-lg font-black text-zinc-900 font-mono">{formatCurrency(reading.bill_details?.total || 0)}</p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex items-center gap-2">
+                    {/* Ver Comprobante Digital */}
                     <button 
                       onClick={() => {
                         const targetFacturaId = reading.factura_id || reading.id;
-                        console.log("Imprimir recibo/factura clickeado para ID:", targetFacturaId);
                         navigate(`/recibo/${targetFacturaId}`);
                       }}
-                      className="p-3 bg-zinc-50 text-emerald-700 hover:bg-emerald-50 rounded-xl transition-all border border-zinc-200/80 shadow-sm flex items-center gap-1.5 active:scale-95"
-                      title="Imprimir Factura / Ver Recibo"
+                      className="px-3 py-2 bg-zinc-50 text-blue-700 hover:bg-blue-50 rounded-xl transition-all border border-zinc-200/80 shadow-sm flex items-center gap-1.5 active:scale-95 text-xs font-bold"
+                      title="Ver Comprobante Digital"
                     >
-                      <DollarSign className="w-5 h-5 text-emerald-600" />
-                      <ReceiptIcon className="w-4 h-4 text-zinc-400" />
+                      <ReceiptIcon className="w-4 h-4 text-blue-600" />
+                      <span className="hidden sm:inline">Comprobante</span>
                     </button>
+
+                    {/* Imprimir Ticket 80mm */}
+                    <button 
+                      onClick={() => {
+                        const targetFacturaId = reading.factura_id || reading.id;
+                        navigate(`/recibo/${targetFacturaId}?mode=ticket`);
+                      }}
+                      className="px-3 py-2 bg-zinc-50 text-zinc-800 hover:bg-zinc-100 rounded-xl transition-all border border-zinc-200/80 shadow-sm flex items-center gap-1.5 active:scale-95 text-xs font-bold"
+                      title="Imprimir Ticket Térmico 80mm"
+                    >
+                      <Printer className="w-4 h-4 text-emerald-600" />
+                      <span className="hidden sm:inline">Ticket 80mm</span>
+                    </button>
+
+                    {/* Cobro / Pago de factura */}
                     {reading.status !== 'paid' && (
                       <button 
-                        onClick={() => markAsPaid(reading.id!)}
-                        className="px-4 py-2 bg-green-600 text-white rounded-xl font-bold text-sm hover:bg-green-700 transition-all shadow-lg shadow-green-100"
+                        onClick={() => markAsPaid(reading)}
+                        className="px-3.5 py-2 bg-blue-600 text-white rounded-xl font-bold text-xs hover:bg-blue-700 transition-all shadow-md shadow-blue-100 flex items-center gap-1 active:scale-95"
                       >
-                        Pagar
+                        <DollarSign className="w-4 h-4" />
+                        Cobrar
                       </button>
                     )}
                   </div>
@@ -822,6 +848,22 @@ export default function UserDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Modal de Cobro */}
+      {payingReading && (
+        <PaymentModal
+          isOpen={!!payingReading}
+          onClose={() => setPayingReading(null)}
+          onConfirmPayment={handleConfirmPaymentModal}
+          invoiceData={{
+            id: payingReading.id || '',
+            factura_id: payingReading.factura_id,
+            userName: user.name,
+            meterId: user.meter_id,
+            total: payingReading.bill_details?.total || 0
+          }}
+        />
+      )}
     </div>
   );
 }
